@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# Python (backend)
+# ---------------------------------------------------------------------------
+backend/.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Node / Next.js (frontend)
+# ---------------------------------------------------------------------------
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/.vercel/
+frontend/coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------------------------------------------------------------------------
+# Runtime data (user uploads + sqlite DB). NEVER commit — contains real
+# customer / dataset content and a writable per-environment database.
+# ---------------------------------------------------------------------------
+backend/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# ---------------------------------------------------------------------------
+# Secrets / local config
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+
+# ---------------------------------------------------------------------------
+# IDE / OS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Build / packaging
+# ---------------------------------------------------------------------------
+dist/
+build/
+*.tsbuildinfo

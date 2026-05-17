@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "engine": "sqlite",
+  "notes": [
+    "Timestamps stored as ISO 8601 TEXT (SQLAlchemy DateTime convention).",
+    "Monetary values stored as INTEGER cents to avoid SQLite's lack of native decimal.",
+    "Foreign keys enforced via PRAGMA foreign_keys = ON at connection time."
+  ],
+  "tables": [
+    {
+      "name": "users",
+      "purpose": "Application users. For the MVP only the hardcoded 'user' is provisioned, but the schema supports multiple users so future auth changes do not require migration.",
+      "columns": [
+        { "name": "id", "type": "INTEGER", "primary_key": true, "autoincrement": true },
+        { "name": "username", "type": "TEXT", "nullable": false, "unique": true },
+        { "name": "created_at", "type": "TEXT", "nullable": false, "default": "CURRENT_TIMESTAMP" }
+      ],
+      "indices": [
+        { "name": "ix_users_username", "columns": ["username"], "unique": true }
+      ]
+    },
+    {
+      "name": "project_types",
+      "purpose": "Catalog of project types. Seeded on first run; only one is active for the MVP.",
+      "columns": [
+        { "name": "id", "type": "INTEGER", "primary_key": true, "autoincrement": true },
+        { "name": "code", "type": "TEXT", "nullable": false, "unique": true, "comment": "Stable machine identifier, e.g. 'value_discovery'" },
+        { "name": "name", "type": "TEXT", "nullable": false, "comment": "Display name" },
+        { "name": "is_active", "type": "INTEGER", "nullable": false, "default": 0, "comment": "Boolean; 1 if usable in the MVP" }
+      ],
+      "indices": [
+        { "name": "ix_project_types_code", "columns": ["code"], "unique": true }
+      ]
+    },
+    {
+      "name": "projects",
+      "purpose": "A project owned by a user, of a given project type.",
+      "columns": [
+        { "name": "id", "type": "INTEGER", "primary_key": true, "autoincrement": true },
+        { "name": "user_id", "type": "INTEGER", "nullable": false },
+        { "name": "project_type_id", "type": "INTEGER", "nullable": false },
+        { "name": "name", "type": "TEXT", "nullable": false },
+        { "name": "description", "type": "TEXT", "nullable": true },
+        { "name": "status", "type": "TEXT", "nullable": false, "default": "'draft'", "comment": "draft | active | archived" },
+        { "name": "created_at", "type": "TEXT", "nullable": false, "default": "CURRENT_TIMESTAMP" },
+        { "name": "updated_at", "type": "TEXT", "nullable": false, "default": "CURRENT_TIMESTAMP" }
+      ],
+      "foreign_keys": [
+        { "columns": ["user_id"], "references": { "table": "users", "columns": ["id"] }, "on_delete": "CASCADE" },
+        { "columns": ["project_type_id"], "references": { "table": "project_types", "columns": ["id"] }, "on_delete": "RESTRICT" }
+      ],
+      "indices": [
+        { "name": "ix_projects_user_id", "columns": ["user_id"] },
+        { "name": "ix_projects_user_type", "columns": ["user_id", "project_type_id"] }
+      ]
+    },
+    {
+      "name": "value_discovery_opportunities",
+      "purpose": "Child entity of a Value Discovery project: each row is an identified opportunity with estimated value and effort.",
+      "columns": [
+        { "name": "id", "type": "INTEGER", "primary_key": true, "autoincrement": true },
+        { "name": "project_id", "type": "INTEGER", "nullable": false },
+        { "name": "title", "type": "TEXT", "nullable": false },
+        { "name": "description", "type": "TEXT", "nullable": true },
+        { "name": "business_unit", "type": "TEXT", "nullable": true, "comment": "Free-text label for grouping in the UI" },
+        { "name": "estimated_annual_value_cents", "type": "INTEGER", "nullable": true, "comment": "Annual value in USD cents; null if not yet estimated" },
+        { "name": "effort", "type": "TEXT", "nullable": true, "comment": "small | medium | large" },
+        { "name": "priority", "type": "TEXT", "nullable": true, "comment": "low | medium | high" },
+        { "name": "status", "type": "TEXT", "nullable": false, "default": "'identified'", "comment": "identified | validated | in_progress | done" },
+        { "name": "created_at", "type": "TEXT", "nullable": false, "default": "CURRENT_TIMESTAMP" },
+        { "name": "updated_at", "type": "TEXT", "nullable": false, "default": "CURRENT_TIMESTAMP" }
+      ],
+      "foreign_keys": [
+        { "columns": ["project_id"], "references": { "table": "projects", "columns": ["id"] }, "on_delete": "CASCADE" }
+      ],
+      "indices": [
+        { "name": "ix_vd_opportunities_project_id", "columns": ["project_id"] }
+      ]
+    }
+  ],
+  "seed_data": {
+    "project_types": [
+      { "code": "value_discovery", "name": "Value Discovery", "is_active": 1 },
+      { "code": "business_process_discovery", "name": "Business Process Discovery", "is_active": 0 },
+      { "code": "ai_assessment", "name": "AI Assessment", "is_active": 0 },
+      { "code": "data_quality_assessment", "name": "Data Quality Assessment", "is_active": 0 }
+    ]
+  }
+}

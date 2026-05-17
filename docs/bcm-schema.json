@@ -1,0 +1,61 @@
+{
+  "version": 2,
+  "engine": "sqlite",
+  "notes": [
+    "Adds two tables to the existing schema (see db-schema.json) for the BCM creation feature.",
+    "Both tables hang off projects via project_id with ON DELETE CASCADE.",
+    "BCM data only ever exists for projects of type 'value_discovery'; this is enforced in the application layer, not via DB constraint."
+  ],
+  "tables": [
+    {
+      "name": "bcm_capabilities",
+      "purpose": "Hierarchical capability tree (L1 / L2 / L3) for a project's Business Capability Map. Adjacency list (parent_id) with explicit level for fast filtering and hierarchy validation.",
+      "columns": [
+        { "name": "id", "type": "INTEGER", "primary_key": true, "autoincrement": true },
+        { "name": "project_id", "type": "INTEGER", "nullable": false },
+        { "name": "parent_id", "type": "INTEGER", "nullable": true, "comment": "NULL for L1; FK to another row in this table for L2/L3" },
+        { "name": "level", "type": "INTEGER", "nullable": false, "comment": "1 | 2 | 3" },
+        { "name": "name", "type": "TEXT", "nullable": false },
+        { "name": "description", "type": "TEXT", "nullable": true },
+        { "name": "position", "type": "INTEGER", "nullable": false, "comment": "Order among siblings under the same parent" },
+        { "name": "created_at", "type": "TEXT", "nullable": false, "default": "CURRENT_TIMESTAMP" },
+        { "name": "updated_at", "type": "TEXT", "nullable": false, "default": "CURRENT_TIMESTAMP" }
+      ],
+      "foreign_keys": [
+        { "columns": ["project_id"], "references": { "table": "projects", "columns": ["id"] }, "on_delete": "CASCADE" },
+        { "columns": ["parent_id"], "references": { "table": "bcm_capabilities", "columns": ["id"] }, "on_delete": "CASCADE" }
+      ],
+      "indices": [
+        { "name": "ix_bcm_caps_project", "columns": ["project_id"] },
+        { "name": "ix_bcm_caps_project_parent", "columns": ["project_id", "parent_id"] },
+        { "name": "ix_bcm_caps_project_level", "columns": ["project_id", "level"] }
+      ],
+      "invariants": [
+        "level=1 -> parent_id IS NULL",
+        "level=2 -> parent_id is a row with level=1 in the same project",
+        "level=3 -> parent_id is a row with level=2 in the same project",
+        "These are enforced at write time in the API layer."
+      ]
+    },
+    {
+      "name": "bcm_chat_messages",
+      "purpose": "Chat transcript between the user and the BCM creation agent, one row per logical message turn.",
+      "columns": [
+        { "name": "id", "type": "INTEGER", "primary_key": true, "autoincrement": true },
+        { "name": "project_id", "type": "INTEGER", "nullable": false },
+        { "name": "role", "type": "TEXT", "nullable": false, "comment": "'user' | 'assistant'" },
+        { "name": "content", "type": "TEXT", "nullable": false, "comment": "Human-visible message text" },
+        { "name": "raw", "type": "TEXT", "nullable": true, "comment": "Provider-native message JSON for the assistant turn (tool_use/tool_result blocks) used to replay context on the next call. NULL on user rows." },
+        { "name": "model_provider", "type": "TEXT", "nullable": true, "comment": "'anthropic' | 'openai' (assistant only)" },
+        { "name": "model_id", "type": "TEXT", "nullable": true },
+        { "name": "created_at", "type": "TEXT", "nullable": false, "default": "CURRENT_TIMESTAMP" }
+      ],
+      "foreign_keys": [
+        { "columns": ["project_id"], "references": { "table": "projects", "columns": ["id"] }, "on_delete": "CASCADE" }
+      ],
+      "indices": [
+        { "name": "ix_bcm_chat_project_created", "columns": ["project_id", "created_at"] }
+      ]
+    }
+  ]
+}

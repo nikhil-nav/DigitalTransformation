@@ -1,0 +1,7 @@
+node_modules
+.next
+.env*.local
+.git
+tests/e2e
+playwright-report
+test-results
