@@ -138,6 +138,55 @@ describe("DataQualitySection", () => {
     expect(deleteCall![0]).toBe("/api/projects/11/dq/datasets/7");
   });
 
+  it("starts polling when a dataset's annotation_status is 'running'", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+
+    vi.stubGlobal(
+      "fetch",
+      makeFetchMock({
+        "GET /api/projects/11/dq/datasets": () =>
+          jsonResponse(200, [
+            { ...sampleDataset, annotation_status: "running" },
+          ]),
+      }),
+    );
+
+    render(<DataQualitySection projectId={11} />);
+    await waitFor(() => expect(screen.getByText("biz.xlsx")).toBeInTheDocument());
+
+    // The effect schedules an interval with the 5s cadence because the
+    // dataset is mid-annotation.
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 5000);
+
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
+  });
+
+  it("does NOT start polling when all annotations are settled", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+
+    vi.stubGlobal(
+      "fetch",
+      makeFetchMock({
+        "GET /api/projects/11/dq/datasets": () =>
+          jsonResponse(200, [
+            { ...sampleDataset, annotation_status: "done" },
+          ]),
+      }),
+    );
+
+    render(<DataQualitySection projectId={11} />);
+    await waitFor(() => expect(screen.getByText("biz.xlsx")).toBeInTheDocument());
+
+    // No setInterval call with our 5s polling cadence.
+    const pollCalls = setIntervalSpy.mock.calls.filter(
+      ([, ms]) => ms === 5000,
+    );
+    expect(pollCalls).toHaveLength(0);
+    setIntervalSpy.mockRestore();
+  });
+
   it("mounts the config page when config_completed_at is null", async () => {
     const ungated = { ...sampleDataset, config_completed_at: null };
     vi.stubGlobal(

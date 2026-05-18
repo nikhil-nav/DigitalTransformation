@@ -85,6 +85,22 @@ export default function DataQualitySection({
     }
   }, [returnToSimilarity, activeDataset?.config_completed_at]);
 
+  // Annotation runs as a backend BackgroundTask, so the upload returns
+  // 'running' immediately. Poll the dataset list every 5s while any
+  // dataset is still 'running' so the AI badge flips to done/failed
+  // without the user having to refresh. The interval is cleared as soon
+  // as no dataset is in flight, so an idle dashboard makes zero polls.
+  const hasRunningAnnotation = (datasets ?? []).some(
+    (d) => d.annotation_status === "running",
+  );
+  useEffect(() => {
+    if (!hasRunningAnnotation) return;
+    const id = window.setInterval(() => {
+      void load();
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [hasRunningAnnotation, load]);
+
   async function handleFiles(list: FileList) {
     setUploading(true);
     setError(null);

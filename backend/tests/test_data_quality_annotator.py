@@ -99,6 +99,17 @@ def _upload(client, pid: int, payload: bytes, filename: str = "p.xlsx") -> dict:
     return r.json()
 
 
+def _refetch(client, pid: int, dataset_id: int) -> dict:
+    """Annotation now runs as a BackgroundTask: the upload response captures
+    the in-flight state ('running'), and the task mutates the row after the
+    response is sent. Starlette's TestClient executes the task before
+    client.post returns, so a refetch right after observes the final state
+    ('done' or 'failed')."""
+    r = client.get(f"/api/projects/{pid}/dq/datasets/{dataset_id}")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 def _good_response(issue_ids: list[int]) -> str:
     return json.dumps(
         {
@@ -168,8 +179,10 @@ def test_upload_with_keys_runs_annotation_and_marks_issues_done(
     monkeypatch.setattr(annotator, "_call_provider_text", fake_call)
 
     ds = _upload(client, pid, _issues_xlsx())
-
-    # The dataset row exposes annotation_status='done'
+    # Upload response captures the in-flight 'running' state.
+    assert ds["annotation_status"] == "running"
+    # Background task has executed by now; refetch to see the final state.
+    ds = _refetch(client, pid, ds["id"])
     assert ds["annotation_status"] == "done"
     assert ds["annotated_at"] is not None
 
@@ -203,6 +216,7 @@ def test_invalid_then_valid_response_recovers_via_one_retry(
     monkeypatch.setattr(annotator, "_call_provider_text", fake_call)
 
     ds = _upload(client, pid, _issues_xlsx())
+    ds = _refetch(client, pid, ds["id"])
     assert ds["annotation_status"] == "done"
     # The two calls used different system prompts
     assert calls[0] != calls[1]
@@ -221,7 +235,9 @@ def test_double_invalid_response_marks_issues_failed_with_raw_preserved(
     monkeypatch.setattr(annotator, "_call_provider_text", fake_call)
 
     ds = _upload(client, pid, _issues_xlsx())
-    # Every issue failed but the upload still succeeded
+    # Upload itself succeeded; the background task ran and recorded
+    # the schema-validation failure on the dataset row.
+    ds = _refetch(client, pid, ds["id"])
     assert ds["annotation_status"] == "failed"
     assert "schema validation" in (ds["annotation_error"] or "").lower()
 
@@ -304,6 +320,7 @@ def test_provider_exception_marks_dataset_failed_no_upload_break(
     monkeypatch.setattr(annotator, "_call_provider_text", fake_call)
 
     ds = _upload(client, pid, _issues_xlsx())
+    ds = _refetch(client, pid, ds["id"])
     assert ds["annotation_status"] == "failed"
     assert "boom from provider" in (ds["annotation_error"] or "")
 
@@ -347,7 +364,65 @@ def test_manual_annotate_endpoint_runs_annotator(client, db, monkeypatch):
 
     r = client.post(f"/api/projects/{pid}/dq/datasets/{ds['id']}/annotate")
     assert r.status_code == 200, r.text
-    assert r.json()["annotation_status"] == "done"
+    # The annotator now runs as a FastAPI BackgroundTask: the response
+    # captures the in-flight state ("running"), then the task runs after
+    # the response is sent. Starlette's TestClient executes background
+    # tasks before client.post() returns, so refetching here observes the
+    # post-task state ("done").
+    assert r.json()["annotation_status"] == "running"
+    refreshed = client.get(
+        f"/api/projects/{pid}/dq/datasets/{ds['id']}"
+    ).json()
+    assert refreshed["annotation_status"] == "done"
+
+
+def test_upload_does_not_block_on_slow_llm(client, db, monkeypatch):
+    """Regression: a slow LLM provider must NOT keep the upload request open.
+    Annotation runs as a FastAPI BackgroundTask; the upload returns
+    'running' immediately. For a real wide workbook with many issues this
+    is what prevents browser/proxy timeouts from killing the upload."""
+    import time
+
+    _user, sid = login_as(client, db, "user")
+    _set_keys(sid)
+    pid = make_dq_project(client)
+
+    call_count = {"n": 0}
+
+    def slow_fake_call(keys: LlmKeys, system: str, user: str) -> str:
+        call_count["n"] += 1
+        time.sleep(0.4)  # exaggerated "slow LLM" to amplify any sync wait
+        ids = [int(it["issue_id"]) for it in json.loads(user.split("Input:\n\n", 1)[1])["issues"]]
+        return _good_response(ids)
+
+    monkeypatch.setattr(annotator, "_call_provider_text", slow_fake_call)
+
+    # Time the upload itself. Under the OLD sync flow this would have
+    # included every LLM call's sleep. Under the new flow only the
+    # profile + initial response are on the request thread.
+    started = time.monotonic()
+    ds = _upload(client, pid, _issues_xlsx())
+    upload_elapsed = time.monotonic() - started
+
+    # Background task runs synchronously in the TestClient AFTER the
+    # response is sent; so when client.post returns, the task has run.
+    # We assert the *response body* shows 'running' (proving the
+    # endpoint did not wait on the LLM) and that the task DID eventually
+    # complete (refetch shows 'done').
+    assert ds["annotation_status"] == "running"
+    refreshed = _refetch(client, pid, ds["id"])
+    assert refreshed["annotation_status"] == "done"
+
+    # The LLM was called at least once.
+    assert call_count["n"] >= 1
+    # Hard upper bound on response-cycle (incl. ALL LLM calls under
+    # TestClient): if regression re-introduces sync waits, this fires.
+    # Per-LLM-call sleep is 0.4s; with N batches we'd see ~0.4*N elapsed.
+    # Real upload + profile is well under 2s for the fixture.
+    assert upload_elapsed < 5.0, (
+        f"upload took {upload_elapsed:.2f}s (LLM was called {call_count['n']}x). "
+        f"If this regresses past 5s, sync annotation has likely been re-introduced."
+    )
 
 
 def test_re_profile_resets_annotation_status_to_pending(client, db, monkeypatch):
@@ -366,6 +441,7 @@ def test_re_profile_resets_annotation_status_to_pending(client, db, monkeypatch)
     monkeypatch.setattr(annotator, "_call_provider_text", fake_call)
 
     ds = _upload(client, pid, _issues_xlsx())
+    ds = _refetch(client, pid, ds["id"])
     assert ds["annotation_status"] == "done"
 
     # Manual re-profile does NOT run annotation; it just regenerates stats.

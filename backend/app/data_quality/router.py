@@ -16,6 +16,7 @@ from typing import Annotated
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Cookie,
     Depends,
     File,
@@ -24,7 +25,8 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 import json
 from datetime import datetime, timezone
@@ -202,6 +204,7 @@ def get_dataset(
 )
 def upload_dataset(
     project_id: int,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user_row)],
     db: Annotated[Session, Depends(get_db)],
     upload: Annotated[UploadFile, File()],
@@ -299,21 +302,63 @@ def upload_dataset(
             detail=f"Profiling failed: {e}",
         ) from e
 
-    # Annotate best-effort: missing/invalid LLM key, network errors, and
-    # provider failures are all surfaced via `annotation_status='failed'`
-    # on the dataset row, never as an upload failure. Stats dashboard is
-    # the source of truth; AI annotation is enrichment.
+    # Annotation runs as a FastAPI BackgroundTask so a wide workbook
+    # (many columns -> many issues -> many LLM batches) doesn't make the
+    # upload request itself block past browser/proxy timeouts. We mark the
+    # status 'running' here, commit, and return; the task below mutates
+    # the row with a FRESH SQLAlchemy session (the request-scoped one is
+    # closed once the response is sent).
     keys = session_keys.get(session_id) if session_id else None
     if keys is not None:
-        try:
-            annotate_dataset(db, row, keys)
-        except Exception as e:  # noqa: BLE001
-            row.annotation_status = "failed"
-            row.annotation_error = str(e)[:500]
-
-    db.commit()
+        row.annotation_status = "running"
+        row.annotation_error = None
+        db.commit()
+        # Bind the background task to THIS request's engine — picks up the
+        # per-test in-memory engine under pytest and the prod engine in
+        # prod, with no global-singleton/dependency-override gymnastics.
+        background_tasks.add_task(
+            _run_annotation_in_background, db.get_bind(), row.id, keys
+        )
+    else:
+        db.commit()
     db.refresh(row)
     return row
+
+
+def _run_annotation_in_background(
+    engine: Engine, dataset_id: int, keys: LlmKeys
+) -> None:
+    """Run AI annotation against the dataset using a fresh DB session
+    bound to the same engine as the request that scheduled this task.
+
+    Any exception here is contained — the row's annotation_status is set
+    to 'failed' with the error message, so the dashboard can surface a
+    degraded state. The upload that scheduled this task has already
+    returned 201 to the user; nothing here can affect that response.
+    """
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as task_db:
+        dataset = (
+            task_db.query(DataQualityDataset).filter_by(id=dataset_id).one_or_none()
+        )
+        if dataset is None:
+            # The dataset was deleted between scheduling and the task
+            # running. Nothing to do.
+            return
+        try:
+            annotate_dataset(task_db, dataset, keys)
+            task_db.commit()
+        except Exception as e:  # noqa: BLE001 - never propagate from a bg task
+            task_db.rollback()
+            dataset = (
+                task_db.query(DataQualityDataset)
+                .filter_by(id=dataset_id)
+                .one_or_none()
+            )
+            if dataset is not None:
+                dataset.annotation_status = "failed"
+                dataset.annotation_error = str(e)[:500]
+                task_db.commit()
 
 
 @router.delete(
@@ -605,15 +650,19 @@ def update_relationship_status(
 def recompute_annotations(
     project_id: int,
     dataset_id: int,
+    background_tasks: BackgroundTasks,
     user: Annotated[User, Depends(get_current_user_row)],
     db: Annotated[Session, Depends(get_db)],
     session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
 ) -> DataQualityDataset:
     """Re-run the AI annotator over every issue in the dataset.
 
-    Unlike the upload path (which is best-effort and never blocks the
-    response on annotation), this endpoint surfaces the LLM key requirement
-    as a hard error since the user explicitly asked for annotation.
+    Same background-task pattern as the upload path: missing/invalid LLM
+    key is a hard 400 (because the user explicitly clicked "annotate"),
+    but the LLM round-trips themselves run in the background so a wide
+    workbook with many issues doesn't make the request hang past
+    browser/proxy timeouts. The response returns the dataset row with
+    annotation_status='running'; the frontend polls until done.
     """
     project = _data_quality_project_or_404(db, project_id, user)
     dataset = _project_dataset_or_404(db, project, dataset_id)
@@ -624,16 +673,13 @@ def recompute_annotations(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="LLM API key not configured. Set it in Chat Settings.",
         )
-    try:
-        annotate_dataset(db, dataset, keys)
-    except Exception as e:  # noqa: BLE001 - surface to user
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"AI annotation failed: {e}",
-        ) from e
+    dataset.annotation_status = "running"
+    dataset.annotation_error = None
     db.commit()
     db.refresh(dataset)
+    background_tasks.add_task(
+        _run_annotation_in_background, db.get_bind(), dataset.id, keys
+    )
     return dataset
 
 
