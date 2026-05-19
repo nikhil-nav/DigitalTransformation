@@ -78,6 +78,57 @@ independently. No contract means no split work.
 
 ---
 
+## Spec Versioning
+
+Every spec file MUST maintain a **Changelog** section (§9) that records every change made after the file is first written.
+
+### Rules
+
+- **On creation:** Add a single entry — `v1.0 | YYYY-MM-DD | Created`.
+- **On any edit:** Increment the version, record the date, and write a one-line description of exactly what changed. Never edit a previous entry.
+- **Version format:** `vMAJOR.MINOR` — increment MINOR for wording fixes or additions within an existing section; increment MAJOR for requirement additions/removals, scope changes, or API contract changes.
+- **Amendment after APPROVED:** A spec locked at APPROVED may only be changed by adding an `AMENDMENT` entry to the changelog explaining what changed and why. The amendment must be approved by a human before implementation resumes.
+
+### Changelog entry format
+
+```
+| v1.0 | 2026-05-19 | Initial creation |
+| v1.1 | 2026-05-20 | Clarified repository layer import rules in §6 |
+| v2.0 | 2026-05-21 | AMENDMENT: Added requirement REQ-16 (logging middleware); approved by @nikhil |
+```
+
+The changelog lives at the bottom of every spec file, after the SCORE table (§9).
+
+---
+
+## Module File Naming Convention
+
+All backend module files MUST follow the `{module}.{layer}.py` naming pattern inside the module's own folder:
+
+```
+auth/
+├── __init__.py          # re-exports public surface (router, *Service, *Repository, schemas)
+├── auth.router.py
+├── auth.controller.py
+├── auth.service.py
+├── auth.repository.py
+├── auth.models.py
+└── auth.schemas.py
+```
+
+Because Python cannot import dot-named files via standard `import` syntax, each module's `__init__.py` MUST re-export the public surface using `importlib.import_module` so that all consumers import from the package, never from the dot-named file directly:
+
+```python
+# auth/__init__.py  — example
+from importlib import import_module as _im
+_r = _im("app.auth.auth.router")
+router = _r.router
+```
+
+This applies to all modules: `auth`, `projects`, `bcm`, `files`, `threads`, `data_quality`, and any future module. The `common/` package follows the same convention (`common.db.py`, `common.exceptions.py`, etc.).
+
+---
+
 ## Anti-Patterns (Forbidden)
 - Writing code "temporarily" before a spec exists
 - Specs that say "handle errors appropriately" (too vague — be specific)

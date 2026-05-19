@@ -124,3 +124,11 @@ Implementation is DONE only when all boxes can be checked.
 
 **Revision needed:** (list gaps if total < 20 or any dimension < minimum)
 - ...
+
+---
+
+## 9. Changelog
+
+| Version | Date | Change |
+|---------|------|--------|
+| v1.0 | YYYY-MM-DD | Initial creation |
