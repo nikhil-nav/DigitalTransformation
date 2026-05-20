@@ -1,6 +1,6 @@
 # SPEC-001: Modular Layered Architecture Refactor (Backend)
 
-**Status:** APPROVED
+**Status:** DONE
 **Created:** 2026-05-19
 **Author:** spec-writer agent
 **Touches:** Backend

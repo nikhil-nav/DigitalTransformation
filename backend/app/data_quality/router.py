@@ -32,6 +32,10 @@ import json
 from datetime import datetime, timezone
 
 from app.auth import SESSION_COOKIE, get_current_user_row
+from app.data_quality.data_quality_controller import (
+    require_dq_project,
+    require_dataset,
+)
 from app.data_quality.agent import (
     DQ_TOOLS,
     SYSTEM_PROMPT as DQ_SYSTEM_PROMPT,
@@ -113,41 +117,14 @@ ALLOWED_MIMES = {
 }
 
 
-def _data_quality_project_or_404(
-    db: Session, project_id: int, user: User
-) -> Project:
-    project = (
-        db.query(Project).filter_by(id=project_id, user_id=user.id).one_or_none()
-    )
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
-        )
-    if project.project_type.code != DATA_QUALITY_CODE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Data Quality endpoints are only available for "
-                f"data_quality_assessment projects "
-                f"(this project is '{project.project_type.code}')"
-            ),
-        )
-    return project
+def _data_quality_project_or_404(db: Session, project_id: int, user: User) -> Project:
+    """Delegate to controller layer."""
+    return require_dq_project(db, project_id, user)
 
 
-def _project_dataset_or_404(
-    db: Session, project: Project, dataset_id: int
-) -> DataQualityDataset:
-    row = (
-        db.query(DataQualityDataset)
-        .filter_by(id=dataset_id, project_id=project.id)
-        .one_or_none()
-    )
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found"
-        )
-    return row
+def _project_dataset_or_404(db: Session, project: Project, dataset_id: int) -> DataQualityDataset:
+    """Delegate to controller layer."""
+    return require_dataset(db, project, dataset_id)
 
 
 def _data_dir() -> Path:

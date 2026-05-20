@@ -111,16 +111,34 @@ All traffic enters through **Next.js on port 3000**. Requests to `/api/*` are pr
 - Invalid sessions redirect to `/login`
 
 ### Backend (`backend/app/`)
-**BCM domain:** `bcm.py` — AI agent + CRUD for L1/L2/L3 capability hierarchy
+
+The backend follows a **modular layered architecture**: each domain module is a package with five layers.
+
+```
+{module}/
+  {module}.router.py      # FastAPI routes (HTTP boundary)
+  {module}.controller.py  # Request/response handling, input validation
+  {module}.service.py     # Business logic
+  {module}.repository.py  # Data access (SQLAlchemy queries)
+  {module}.schemas.py     # Pydantic request/response models
+  {module}.models.py      # SQLAlchemy ORM models
+```
+
+**Modules:**
+- `auth/` — session-cookie authentication
+- `bcm/` — AI agent + CRUD for L1/L2/L3 capability hierarchy
+- `files/` — Excel/PDF upload and storage
+- `projects/` — project management
+- `threads/` — conversation threads
 
 **Data Quality domain (`data_quality/`):**
-- `router.py` — all DQ endpoints (~45KB, the public surface)
-- `profile.py`, `stats.py` — profiling and statistical analysis
-- `normalize.py` — pre-similarity normalization (case, whitespace, unicode, phone/date parsers)
-- `similarity.py` / `similarity_llm.py` — algorithmic and LLM-assisted similarity scoring
-- `cluster.py`, `cross.py`, `annotator.py`, `recommend.py`, `agent.py` — clustering, referential checks, annotation, recommendations, DQ chat agent
+- `router.py` — DQ HTTP endpoints (public surface)
+- `data_quality.controller.py`, `data_quality.service.py`, `data_quality.repository.py`, `data_quality.schemas.py`, `data_quality.models.py` — layered DQ handlers
+- `pipeline/` — analysis pipeline steps: `profile.py`, `stats.py`, `normalize.py`, `similarity.py`, `similarity_llm.py`, `cluster.py`, `cross.py`, `annotator.py`, `recommend.py`, `agent.py`, `parsers.py`, `inspect.py`
 
-**Shared:** `llm/` (Anthropic + OpenAI provider abstraction), `db.py` + `models.py` (SQLAlchemy 2.0 + SQLite), `files.py` (Excel/PDF upload), `threads.py` (conversation threads)
+**Shared (`common/`):** `db.py` (SQLAlchemy engine/session), `models.py` (base model), `dependencies.py` (FastAPI DI), `exceptions.py`, `security.py`
+
+**LLM:** `llm/` — Anthropic + OpenAI provider abstraction; tool definitions in Anthropic canonical format; `openai_provider.py` translates
 
 ### Frontend (`frontend/`)
 - App Router: `(app)/` auth-gated, `(auth)/` public
