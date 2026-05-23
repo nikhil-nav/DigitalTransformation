@@ -16,7 +16,10 @@ export default async function AppLayout({
   return (
     <>
       <header className="app-header">
-        <span className="app-header-title">Digital Transformation Platform</span>
+        <img src="/navikenz_logo.png" alt="Navikenz" className="app-logo" />
+        <span className="app-header-title">
+          Navigate- Digital Transformation Reimagined
+        </span>
         <span className="app-header-user">
           Signed in as <strong>{user.username}</strong>
         </span>

@@ -409,7 +409,7 @@ function SheetPanel({
       labels: ["Complete", "Missing"],
       values: [sheet.completeness_pct, 100 - sheet.completeness_pct],
       hole: 0.65,
-      marker: { colors: ["#00bda5", "#dfe3eb"] },
+      marker: { colors: ["#1f9d74", "#dde4ec"] },
       textinfo: "none",
       hoverinfo: "label+percent",
       sort: false,
@@ -427,7 +427,7 @@ function SheetPanel({
         severityCounts.low,
       ],
       marker: {
-        color: ["#7a1f25", "#f2545b", "#f5c26b", "#7c98b6"],
+        color: ["#741d2a", "#a6293a", "#e0a53c", "#8497ac"],
       },
     },
   ];
@@ -451,7 +451,7 @@ function SheetPanel({
               annotations: [
                 {
                   text: `${sheet.completeness_pct.toFixed(1)}%`,
-                  font: { size: 18, color: "#33475b" },
+                  font: { size: 18, color: "#1e3a52" },
                   showarrow: false,
                 },
               ],
@@ -473,7 +473,7 @@ function SheetPanel({
             data={sevData}
             layout={{
               xaxis: { showgrid: false },
-              yaxis: { showgrid: true, gridcolor: "#eaf0f6", tickformat: "d" },
+              yaxis: { showgrid: true, gridcolor: "#dde4ec", tickformat: "d" },
               showlegend: false,
             }}
             className="h-40 w-full"

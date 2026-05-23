@@ -31,13 +31,13 @@ import {
 import { cn } from "@/lib/utils";
 
 const L1_COLOURS = [
-  "#ff7a59", // coral
-  "#0091ae", // cerulean
-  "#00bda5", // jade
-  "#f5c26b", // marigold
-  "#f2545b", // watermelon
-  "#7c98b6", // heather
-  "#516f90", // slate
+  "#1e3a52", // navy
+  "#2f6f9f", // blue
+  "#1f8a66", // green
+  "#b5791c", // amber
+  "#a6293a", // red
+  "#5a6b8f", // slate-blue
+  "#7a4f86", // plum
 ];
 
 type LayoutName = "hierarchical" | "radial" | "concentric";
@@ -163,14 +163,14 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
               label: "data(label)",
               "font-family":
                 '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-              color: "#33475b",
+              color: "#1e3a52",
               "font-weight": 600,
               "text-valign": "center",
               "text-halign": "center",
               "text-wrap": "wrap",
               "text-max-width": "120px",
               "border-width": 1,
-              "border-color": "#dfe3eb",
+              "border-color": "#dde4ec",
               shape: "round-rectangle",
               "transition-property": "opacity, background-opacity",
               "transition-duration": "150ms" as any,
@@ -209,7 +209,7 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
             selector: "node[?hasHidden]",
             style: {
               "border-width": 2,
-              "border-color": "#33475b",
+              "border-color": "#1e3a52",
               "border-style": "dashed",
             },
           },
@@ -217,7 +217,7 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
             selector: "node:selected",
             style: {
               "border-width": 3,
-              "border-color": "#0091ae",
+              "border-color": "#2f6f9f",
             },
           },
           { selector: "node.faded", style: { opacity: 0.18 } },
@@ -226,14 +226,14 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
             selector: "node.search-hit",
             style: {
               "border-width": 3,
-              "border-color": "#f5c26b",
+              "border-color": "#e0a53c",
             },
           },
           {
             selector: "edge",
             style: {
               width: 1.5,
-              "line-color": "#7c98b6",
+              "line-color": "#8497ac",
               "curve-style": "taxi",
               "taxi-direction": "downward",
               "taxi-turn": 24,
