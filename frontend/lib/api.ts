@@ -513,6 +513,76 @@ export type DqClusterDetail = {
   b_rows: Array<Record<string, string | number | null>>;
 };
 
+// ---------------------------------------------------------------------------
+// IT Map Agent
+// ---------------------------------------------------------------------------
+
+export type ItMapRunStatus = "running" | "done" | "failed";
+export type ItMapMappingStatus = "suggested" | "confirmed" | "dismissed";
+
+export type ItMapInventorySheet = {
+  name: string;
+  row_count: number;
+  column_count: number;
+};
+
+export type ItMapInventory = {
+  id: number;
+  project_id: number;
+  original_filename: string;
+  file_sha256: string;
+  size_bytes: number;
+  sheets: ItMapInventorySheet[];
+  primary_sheet: string;
+  engine_version: string;
+  uploaded_at: string;
+};
+
+export type ItMapAgentRun = {
+  id: number;
+  inventory_id: number;
+  status: ItMapRunStatus;
+  tool_call_count: number;
+  application_count: number;
+  mapping_count: number;
+  unmappable_count: number;
+  error: string | null;
+  engine_version: string;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export type ItMapMapping = {
+  id: number;
+  capability_id: number;
+  confidence: number;
+  rationale: string;
+  status: ItMapMappingStatus;
+  engine_version: string;
+  created_at: string;
+  updated_at: string;
+  confirmed_at: string | null;
+  dismissed_at: string | null;
+};
+
+export type ItMapApplication = {
+  id: number;
+  inventory_id: number;
+  sheet_name: string;
+  row_index: number;
+  raw_row: Record<string, string | number | boolean | null>;
+  inferred_name: string | null;
+  inferred_description: string | null;
+  inferred_business_function: string | null;
+  inferred_technology: string | null;
+  inferred_owner: string | null;
+  inferred_criticality: string | null;
+  inferred_lifecycle: string | null;
+  unmappable_reason: string | null;
+  created_at: string;
+  mappings: ItMapMapping[];
+};
+
 export const api = {
   listProjectTypes: () => request<ProjectType[]>("/api/project-types"),
 
@@ -828,4 +898,85 @@ export const api = {
     request<DqClusterDetail>(
       `/api/projects/${projectId}/dq/datasets/${datasetId}/similarity/runs/${runId}/clusters/${clusterId}`,
     ),
+
+  // --- IT Map Agent ---
+
+  listItMapInventories: (projectId: number) =>
+    request<ItMapInventory[]>(
+      `/api/projects/${projectId}/it-map/inventories`,
+    ),
+  uploadItMapInventory: async (
+    projectId: number,
+    file: File,
+  ): Promise<ItMapInventory> => {
+    const fd = new FormData();
+    fd.append("upload", file);
+    const r = await fetch(`/api/projects/${projectId}/it-map/inventories`, {
+      method: "POST",
+      body: fd,
+    });
+    if (r.status === 401 && typeof window !== "undefined") {
+      window.location.href = "/login";
+      throw new ApiError(401, "Not authenticated");
+    }
+    if (!r.ok) {
+      let message = `HTTP ${r.status}`;
+      try {
+        const body = (await r.json()) as { detail?: string };
+        if (body.detail) message = body.detail;
+      } catch {
+        // ignore
+      }
+      throw new ApiError(r.status, message);
+    }
+    return (await r.json()) as ItMapInventory;
+  },
+  deleteItMapInventory: (projectId: number, inventoryId: number) =>
+    request<void>(
+      `/api/projects/${projectId}/it-map/inventories/${inventoryId}`,
+      { method: "DELETE" },
+    ),
+  runItMapAgent: (projectId: number, inventoryId: number) =>
+    request<ItMapAgentRun>(
+      `/api/projects/${projectId}/it-map/inventories/${inventoryId}/run`,
+      { method: "POST" },
+    ),
+  listItMapRuns: (projectId: number, inventoryId: number) =>
+    request<ItMapAgentRun[]>(
+      `/api/projects/${projectId}/it-map/inventories/${inventoryId}/runs`,
+    ),
+  listItMapApplications: (projectId: number, inventoryId: number) =>
+    request<ItMapApplication[]>(
+      `/api/projects/${projectId}/it-map/inventories/${inventoryId}/applications`,
+    ),
+  listProjectItMapApplications: (
+    projectId: number,
+    statusFilter?: ItMapMappingStatus,
+  ) => {
+    const qs = statusFilter ? `?status_filter=${statusFilter}` : "";
+    return request<ItMapApplication[]>(
+      `/api/projects/${projectId}/it-map/applications${qs}`,
+    );
+  },
+  getItMapApplication: (projectId: number, applicationId: number) =>
+    request<ItMapApplication>(
+      `/api/projects/${projectId}/it-map/applications/${applicationId}`,
+    ),
+  updateItMapMappingStatus: (
+    projectId: number,
+    mappingId: number,
+    status: "confirmed" | "dismissed",
+  ) =>
+    request<ItMapMapping>(
+      `/api/projects/${projectId}/it-map/mappings/${mappingId}`,
+      { method: "PATCH", body: JSON.stringify({ status }) },
+    ),
+  createItMapMapping: (
+    projectId: number,
+    body: { application_id: number; capability_id: number; rationale?: string },
+  ) =>
+    request<ItMapMapping>(`/api/projects/${projectId}/it-map/mappings`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

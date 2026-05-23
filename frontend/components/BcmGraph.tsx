@@ -7,6 +7,7 @@ import {
   GitBranch,
   Loader2,
   Maximize2,
+  Network,
   Pencil,
   Plus,
   Search,
@@ -27,8 +28,11 @@ import {
   ApiError,
   type Capability,
   type CapabilityLevel,
+  type ItMapApplication,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+import ITMapAppDrawer from "./ITMapAppDrawer";
 
 const L1_COLOURS = [
   "#1e3a52", // navy
@@ -70,6 +74,20 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
     null,
   );
   const [internalRefresh, setInternalRefresh] = useState(0);
+  // US 2.1 — IT Map applications overlay. Off by default so the
+  // pure-BCM view is the first thing a user sees; toggling on fetches
+  // the project's mapped apps and adds them as nodes + dashed
+  // "supported by" edges to their L2 capabilities.
+  const [showApps, setShowApps] = useState(false);
+  // Which mappings to render. 'confirmed' (default) shows only user-
+  // vouched mappings. 'all' broadens to non-dismissed, so an agent's
+  // suggested mappings appear too with a lighter style — useful when
+  // the user wants to see the agent's draft before confirming each one.
+  const [appStatusFilter, setAppStatusFilter] = useState<"confirmed" | "all">(
+    "confirmed",
+  );
+  const [apps, setApps] = useState<ItMapApplication[] | null>(null);
+  const [drawerAppId, setDrawerAppId] = useState<number | null>(null);
 
   // ---- Capability colours (by L1 lineage). ----
   const colourMap = useMemo(() => {
@@ -242,12 +260,82 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
           },
           { selector: "edge.faded", style: { opacity: 0.1 } },
           { selector: "edge.search-miss", style: { opacity: 0.08 } },
+          // ----- US 2.1: IT Map application nodes + "supported by" edges
+          {
+            selector: 'node[kind = "app"]',
+            style: {
+              shape: "round-tag",
+              width: 110,
+              height: 32,
+              "font-size": 10,
+              "background-color": "#ffffff",
+              "background-opacity": 1,
+              "border-width": 1.5,
+              "border-color": "#2f6f9f",
+              "border-style": "dashed",
+              color: "#1e3a52",
+              "font-weight": 500,
+            },
+          },
+          {
+            selector: 'edge[kind = "supported-by"]',
+            style: {
+              width: 1,
+              "line-style": "dashed",
+              "line-color": "#2f6f9f",
+              "curve-style": "bezier",
+              "target-arrow-shape": "triangle",
+              "target-arrow-color": "#2f6f9f",
+              "arrow-scale": 0.7 as any,
+              label: "data(label)",
+              "font-size": 8,
+              "text-rotation": "autorotate" as any,
+              "text-background-color": "#ffffff",
+              "text-background-opacity": 0.9,
+              "text-background-padding": "1.5" as any,
+              "text-background-shape": "roundrectangle",
+              color: "#2f6f9f",
+            },
+          },
+          {
+            // Suggested mappings: rendered when the user expands the
+            // overlay filter to include the agent's proposals. Same
+            // basic shape but in marigold and at lower opacity so the
+            // confirmed mappings stay visually dominant.
+            selector: 'edge[kind = "supported-by-suggested"]',
+            style: {
+              width: 1,
+              "line-style": "dashed",
+              "line-color": "#e0a53c",
+              "line-opacity": 0.6,
+              "curve-style": "bezier",
+              "target-arrow-shape": "triangle",
+              "target-arrow-color": "#e0a53c",
+              "arrow-scale": 0.6 as any,
+              label: "data(label)",
+              "font-size": 8,
+              "text-rotation": "autorotate" as any,
+              "text-background-color": "#ffffff",
+              "text-background-opacity": 0.85,
+              "text-background-padding": "1.5" as any,
+              "text-background-shape": "roundrectangle",
+              color: "#8a6420",
+            },
+          },
         ],
         layout: { name: "preset" },
       });
 
       cy.on("tap", "node", (e: { target: { id: () => string } }) => {
-        const id = parseInt(e.target.id().replace("cap-", ""), 10);
+        const raw = e.target.id();
+        if (raw.startsWith("app-")) {
+          // US 2.1: app nodes open the IT Map app drawer (same one the
+          // kanban uses), not the capability detail rail.
+          const appId = parseInt(raw.slice(4), 10);
+          if (Number.isFinite(appId)) setDrawerAppId(appId);
+          return;
+        }
+        const id = parseInt(raw.replace("cap-", ""), 10);
         setSelectedId(Number.isFinite(id) ? id : null);
       });
       cy.on("tap", (e: { target: unknown }) => {
@@ -302,6 +390,37 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
     };
   }, [projectId, refreshKey, internalRefresh]);
 
+  // ---- US 2.1: fetch mapped apps when the overlay is on. ----
+  // 'confirmed': server filters to confirmed only. 'all': server
+  // returns every mapping; we drop dismissed client-side and render
+  // suggested vs confirmed with different edge styling.
+  const loadApps = useCallback(async () => {
+    try {
+      const list =
+        appStatusFilter === "confirmed"
+          ? await api.listProjectItMapApplications(projectId, "confirmed")
+          : await api.listProjectItMapApplications(projectId);
+      setApps(list);
+    } catch (e: unknown) {
+      // Project may not be Value Discovery, IT Map endpoint may not be
+      // registered, or no inventories exist yet. Surface as a soft
+      // warning rather than killing the BCM view.
+      setApps([]);
+      setError(
+        e instanceof ApiError
+          ? `IT Map overlay: ${e.message}`
+          : "IT Map overlay failed",
+      );
+    }
+  }, [projectId, appStatusFilter]);
+  useEffect(() => {
+    if (!showApps) {
+      setApps(null);
+      return;
+    }
+    void loadApps();
+  }, [showApps, loadApps, internalRefresh]);
+
   // ---- Re-render the graph when visible capabilities or layout change. ----
   useEffect(() => {
     if (!cyReady || !cyRef.current || !visibleCapabilities) return;
@@ -310,6 +429,7 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
     const nodes = visibleCapabilities.map((c) => ({
       data: {
         id: `cap-${c.id}`,
+        kind: "cap",
         label: c.name,
         level: c.level,
         color: colourMap.get(c.id) ?? L1_COLOURS[0],
@@ -326,13 +446,70 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
         },
       }));
 
-    cy.elements().remove();
-    cy.add([...nodes, ...edges]);
+    // US 2.1: overlay IT Map app nodes + "supported by" edges when
+    // the toggle is on. Filter mappings to confirmed only (the backend
+    // already filters when called with status_filter=confirmed; this
+    // is defence-in-depth in case the toggle ever swaps to a wider
+    // status filter). Each edge goes capability -> app to match the
+    // spec's "Surgical Equipment --(supported by)--> SurgiCommandPlatform"
+    // direction.
+    const visibleCapIds = new Set(visibleCapabilities.map((c) => c.id));
+    const appNodes =
+      showApps && apps
+        ? apps.map((app) => ({
+            data: {
+              id: `app-${app.id}`,
+              kind: "app",
+              label: app.inferred_name ?? `Row ${app.row_index}`,
+            },
+          }))
+        : [];
+    // Filter rule:
+    //   appStatusFilter='confirmed' -> confirmed only (matches the spec
+    //   default and the server-side filter).
+    //   appStatusFilter='all'       -> non-dismissed (confirmed + suggested),
+    //   tagging suggested ones with kind='supported-by-suggested' so the
+    //   stylesheet can render them in a lighter / dimmer state.
+    const appEdges =
+      showApps && apps
+        ? apps.flatMap((app) =>
+            app.mappings
+              .filter((m) => {
+                if (!visibleCapIds.has(m.capability_id)) return false;
+                if (appStatusFilter === "confirmed") return m.status === "confirmed";
+                return m.status !== "dismissed";
+              })
+              .map((m) => ({
+                data: {
+                  id: `eapp-${app.id}-${m.capability_id}`,
+                  kind:
+                    m.status === "confirmed"
+                      ? "supported-by"
+                      : "supported-by-suggested",
+                  source: `cap-${m.capability_id}`,
+                  target: `app-${app.id}`,
+                  label: "supported by",
+                },
+              })),
+          )
+        : [];
 
-    if (nodes.length === 0) return;
+    cy.elements().remove();
+    cy.add([...nodes, ...edges, ...appNodes, ...appEdges]);
+
+    if (nodes.length === 0 && appNodes.length === 0) return;
 
     cy.layout(buildLayoutOptions(layout)).run();
-  }, [visibleCapabilities, colourMap, cyReady, layout, collapsedIds]);
+  }, [
+    visibleCapabilities,
+    colourMap,
+    cyReady,
+    layout,
+    collapsedIds,
+    showApps,
+    apps,
+    appStatusFilter,
+  ]);
 
   // ---- Resize cytoscape when the right rail toggles. ----
   useEffect(() => {
@@ -505,6 +682,38 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
           <LayoutPicker layout={layout} onChange={setLayout} />
           <button
             type="button"
+            onClick={() => setShowApps((v) => !v)}
+            disabled={!cyReady}
+            aria-pressed={showApps}
+            className={cn(
+              toolbarBtn,
+              showApps && "border-[var(--cerulean)] text-[var(--cerulean)]",
+            )}
+            title="Show IT Map applications as nodes linked to their L2 capabilities (US 2.1)"
+            aria-label="Toggle IT Map applications overlay"
+          >
+            <Network className="h-3.5 w-3.5" />
+            <span>{showApps ? "Hide apps" : "Show apps"}</span>
+          </button>
+          {showApps && (
+            <label
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--geyser)] bg-white px-2 py-1 text-xs text-[var(--pickled-bluewood)]"
+              title="When ON, the agent's suggested mappings (not yet confirmed) also appear, in a lighter marigold style."
+            >
+              <input
+                type="checkbox"
+                checked={appStatusFilter === "all"}
+                onChange={(e) =>
+                  setAppStatusFilter(e.target.checked ? "all" : "confirmed")
+                }
+                aria-label="Include suggested mappings"
+                className="h-3 w-3"
+              />
+              <span>incl. suggested</span>
+            </label>
+          )}
+          <button
+            type="button"
             onClick={handleFit}
             disabled={!cyReady || isEmpty}
             className={toolbarBtn}
@@ -544,6 +753,29 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
             <div className="absolute inset-0 grid place-items-center px-6 text-center text-sm text-[var(--slate)]">
               No capabilities yet. Add some on the Board tab, or ask the chat
               agent to draft a BCM.
+            </div>
+          )}
+          {/* US 2.1: when the overlay is on but the current filter
+              matches zero mappings, give the user a clear hint instead
+              of a silently-unchanged graph. */}
+          {showApps && apps !== null && apps.length === 0 && (
+            <div className="pointer-events-auto absolute right-4 top-4 z-10 max-w-sm rounded-md border border-[var(--cerulean)] bg-white px-3 py-2 text-xs text-[var(--pickled-bluewood)] shadow">
+              <strong className="block text-[var(--cerulean)]">
+                No applications to show
+              </strong>
+              {appStatusFilter === "confirmed" ? (
+                <>
+                  No <em>confirmed</em> mappings exist for this project.
+                  Confirm mappings from the IT Map kanban or app drawer to
+                  see apps here. Or check <strong>incl. suggested</strong>{" "}
+                  above to also see the agent's proposals.
+                </>
+              ) : (
+                <>
+                  No mapped applications exist. Upload an inventory and run
+                  the agent in the IT Map section below.
+                </>
+              )}
             </div>
           )}
           <div
@@ -611,6 +843,21 @@ export default function BcmGraph({ projectId, refreshKey = 0 }: GraphProps) {
             </div>
           </div>
         </div>
+      )}
+      {/* US 2.1: clicking an app node opens the same drawer the kanban
+          uses — single source of truth for Confirm / Dismiss / Add. */}
+      {drawerAppId !== null && capabilities && (
+        <ITMapAppDrawer
+          projectId={projectId}
+          applicationId={drawerAppId}
+          l2Capabilities={capabilities.filter((c) => c.level === 2)}
+          onClose={() => setDrawerAppId(null)}
+          onMutated={() => {
+            // A status flip in the drawer can add or remove the edge,
+            // so re-fetch the confirmed-only app set.
+            if (showApps) void loadApps();
+          }}
+        />
       )}
     </section>
   );

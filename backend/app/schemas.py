@@ -470,3 +470,99 @@ class DataQualityRecommendOut(BaseModel):
     # `mappings` list still contains the input mappings unchanged in that
     # case so the UI can show the user what *would* have been refined.
     llm_error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# IT Map Agent — Part 1
+# ---------------------------------------------------------------------------
+
+
+class ApplicationInventorySheetSummary(BaseModel):
+    name: str
+    row_count: int
+    column_count: int
+
+
+class ApplicationInventoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    project_id: int
+    original_filename: str
+    file_sha256: str
+    size_bytes: int
+    sheets: list[ApplicationInventorySheetSummary]
+    # The sheet the IT Map agent will process. Chosen at upload time as
+    # the largest sheet by row count (per the spec's single-sheet
+    # inventory assumption); other sheets are listed in `sheets` so the
+    # UI can show them as ignored.
+    primary_sheet: str
+    engine_version: str
+    uploaded_at: datetime
+
+
+ItMapRunStatus = Literal["running", "done", "failed"]
+ItMapMappingStatus = Literal["suggested", "confirmed", "dismissed"]
+
+
+class ITMapAgentRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    inventory_id: int
+    status: ItMapRunStatus
+    tool_call_count: int
+    application_count: int
+    mapping_count: int
+    unmappable_count: int
+    error: str | None
+    engine_version: str
+    started_at: datetime
+    finished_at: datetime | None
+
+
+class ApplicationCapabilityMappingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    capability_id: int
+    confidence: float
+    rationale: str
+    status: ItMapMappingStatus
+    engine_version: str
+    created_at: datetime
+    updated_at: datetime
+    confirmed_at: datetime | None
+    dismissed_at: datetime | None
+
+
+class ApplicationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    inventory_id: int
+    sheet_name: str
+    row_index: int
+    raw_row: dict[str, str | int | float | bool | None]
+    inferred_name: str | None
+    inferred_description: str | None
+    inferred_business_function: str | None
+    inferred_technology: str | None
+    inferred_owner: str | None
+    inferred_criticality: str | None
+    inferred_lifecycle: str | None
+    unmappable_reason: str | None
+    created_at: datetime
+    mappings: list[ApplicationCapabilityMappingOut]
+
+
+class ApplicationCapabilityMappingCreate(BaseModel):
+    """User-driven mapping creation. The agent uses the propose_mapping
+    tool; this is the human equivalent (and the only path that produces
+    ``engine_version='user'``). Created mappings are immediately
+    ``status='confirmed'`` — the user explicitly chose this mapping, so
+    it doesn't need to pass through the suggested → confirmed gate."""
+
+    application_id: int
+    capability_id: int
+    rationale: str = Field(default="User-created mapping", min_length=1)
+
+
+class ApplicationCapabilityMappingStatusUpdate(BaseModel):
+    status: Literal["confirmed", "dismissed"]
