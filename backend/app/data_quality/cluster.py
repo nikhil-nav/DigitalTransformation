@@ -35,6 +35,7 @@ Precision commitments:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -60,6 +61,23 @@ from app.models import (
 CLUSTER_VERSION = "1.0.0"
 MAX_PAIRS_PER_RUN = 100_000
 BLOCKING_PREFIX_LEN = 3
+
+
+def cluster_fingerprint(a_members: Iterable[int], b_members: Iterable[int]) -> str:
+    """Stable identifier for a cluster's MEMBERSHIP.
+
+    sha256 over ``a:<sorted_a>|b:<sorted_b>`` where each member-set is
+    rendered as a comma-joined list of decimal ints. Sorting makes the
+    fingerprint order-insensitive; the prefix tags distinguish A from B
+    so a same-sheet dedup with members ``{0,1}`` (which appear on both
+    sides) hashes the same regardless of which side a row was attributed
+    to. Returned as a hex string short enough to index but long enough
+    that collisions are not a practical concern for the dataset sizes
+    Epic 3 supports."""
+    a_sorted = ",".join(str(int(i)) for i in sorted(a_members))
+    b_sorted = ",".join(str(int(i)) for i in sorted(b_members))
+    payload = f"a:{a_sorted}|b:{b_sorted}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 # Algorithms for which text-based blocking is meaningful. Numeric-tolerance
 # and date-proximity cannot use a prefix/soundex blocking key.
@@ -498,6 +516,7 @@ def run_similarity(
                 canonical_key_json=json.dumps(canonical, default=str),
                 a_members_json=json.dumps(sorted(acc.a_members)),
                 b_members_json=json.dumps(sorted(acc.b_members)),
+                fingerprint=cluster_fingerprint(acc.a_members, acc.b_members),
             )
             db.add(row)
             root_to_row[root] = row

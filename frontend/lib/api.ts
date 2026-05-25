@@ -513,6 +513,78 @@ export type DqClusterDetail = {
   b_rows: Array<Record<string, string | number | null>>;
 };
 
+// --- US 3.7: cluster tree + golden record ---
+
+export type DqTreeBucket =
+  | "Important"
+  | "Identifiers"
+  | "Contact"
+  | "Address"
+  | "Dates"
+  | "Numeric"
+  | "Other";
+
+export type DqTreeVariant = {
+  normalized: string | null;
+  raw: string | null;
+  raw_examples: string[];
+  member_count: number;
+};
+
+// US 3.7: ``chosen`` is a string when the user picked one variant,
+// ``null`` for explicit-null OR no-pick (disambiguated by
+// ``chosen_is_explicit``), or a list when the user picked
+// "keep all variants" on a conflict leaf.
+export type DqGoldenValue = string | string[] | null;
+
+export type DqTreeLeaf = {
+  column_a: string;
+  column_b: string;
+  display_name: string;
+  bucket: DqTreeBucket;
+  is_important: boolean;
+  weight: number;
+  is_conflict: boolean;
+  variants: DqTreeVariant[];
+  auto_pick: string | null;
+  chosen: DqGoldenValue;
+  chosen_is_explicit: boolean;
+};
+
+export type DqTreeGroup = {
+  bucket: DqTreeBucket;
+  leaves: DqTreeLeaf[];
+};
+
+export type DqClusterTree = {
+  cluster_fingerprint: string;
+  root_column_a: string;
+  root_column_b: string;
+  root_display_name: string;
+  root_value: DqGoldenValue;
+  root_is_conflict: boolean;
+  root_variants: DqTreeVariant[];
+  root_chosen_is_explicit: boolean;
+  groups: DqTreeGroup[];
+  conflict_count: number;
+  resolved_conflict_count: number;
+  // US 3.8: present when the root pick is an array (keep-all). When
+  // set, `groups` is empty — the data lives inside each subtree below.
+  master_record: DqMasterRecord | null;
+  tree_version: string;
+};
+
+export type DqMasterRecordSubtree = {
+  variant_raw: string;
+  subtree: DqClusterTree;
+};
+
+export type DqMasterRecord = {
+  tag: string; // "<{root_column_name}-Parent>" per the spec
+  root_column_a: string;
+  subtrees: DqMasterRecordSubtree[];
+};
+
 // ---------------------------------------------------------------------------
 // IT Map Agent
 // ---------------------------------------------------------------------------
@@ -897,6 +969,40 @@ export const api = {
   ) =>
     request<DqClusterDetail>(
       `/api/projects/${projectId}/dq/datasets/${datasetId}/similarity/runs/${runId}/clusters/${clusterId}`,
+    ),
+
+  // US 3.7: tree view + golden-record picks. Server rebuilds the tree on
+  // every PUT/DELETE so the caller refreshes in one round-trip.
+  getClusterTree: (
+    projectId: number,
+    datasetId: number,
+    runId: number,
+    clusterId: number,
+  ) =>
+    request<DqClusterTree>(
+      `/api/projects/${projectId}/dq/datasets/${datasetId}/similarity/runs/${runId}/clusters/${clusterId}/tree`,
+    ),
+  setClusterGolden: (
+    projectId: number,
+    datasetId: number,
+    runId: number,
+    clusterId: number,
+    body: { column_name: string; chosen_value: DqGoldenValue },
+  ) =>
+    request<DqClusterTree>(
+      `/api/projects/${projectId}/dq/datasets/${datasetId}/similarity/runs/${runId}/clusters/${clusterId}/tree/golden`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+  clearClusterGolden: (
+    projectId: number,
+    datasetId: number,
+    runId: number,
+    clusterId: number,
+    columnName: string,
+  ) =>
+    request<DqClusterTree>(
+      `/api/projects/${projectId}/dq/datasets/${datasetId}/similarity/runs/${runId}/clusters/${clusterId}/tree/golden/${encodeURIComponent(columnName)}`,
+      { method: "DELETE" },
     ),
 
   // --- IT Map Agent ---

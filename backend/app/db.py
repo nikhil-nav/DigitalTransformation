@@ -152,6 +152,83 @@ def _migrate_dataset_config_column(engine: Engine) -> None:
             )
 
 
+def _migrate_cluster_fingerprint(engine: Engine) -> None:
+    """Idempotent: add Epic 3 Part 6 `fingerprint` to record clusters
+    and backfill it from `a_members_json` + `b_members_json` for any
+    clusters that pre-date Part 6.
+
+    Backfill must happen here (not lazily) because golden-value lookups
+    key on fingerprint; an unfingerprinted row would silently lose its
+    golden values on every re-render."""
+    import json as _json
+    import hashlib as _hashlib
+
+    inspector = inspect(engine)
+    if "data_quality_record_clusters" not in inspector.get_table_names():
+        return
+    existing_cols = {
+        c["name"] for c in inspector.get_columns("data_quality_record_clusters")
+    }
+    with engine.begin() as conn:
+        if "fingerprint" not in existing_cols:
+            conn.execute(
+                text(
+                    "ALTER TABLE data_quality_record_clusters "
+                    "ADD COLUMN fingerprint VARCHAR(64) NOT NULL DEFAULT ''"
+                )
+            )
+        # Backfill any rows still empty — covers both the just-added
+        # column AND any row inserted before the cluster engine started
+        # writing the fingerprint (defensive).
+        rows = conn.execute(
+            text(
+                "SELECT id, a_members_json, b_members_json "
+                "FROM data_quality_record_clusters WHERE fingerprint = ''"
+            )
+        ).fetchall()
+        for row_id, a_json, b_json in rows:
+            try:
+                a_members = _json.loads(a_json) if a_json else []
+                b_members = _json.loads(b_json) if b_json else []
+            except (TypeError, ValueError):
+                a_members, b_members = [], []
+            a_sorted = ",".join(str(int(i)) for i in sorted(a_members))
+            b_sorted = ",".join(str(int(i)) for i in sorted(b_members))
+            digest = _hashlib.sha256(
+                f"a:{a_sorted}|b:{b_sorted}".encode("utf-8")
+            ).hexdigest()
+            conn.execute(
+                text(
+                    "UPDATE data_quality_record_clusters "
+                    "SET fingerprint = :fp WHERE id = :id"
+                ),
+                {"fp": digest, "id": row_id},
+            )
+
+
+def _migrate_golden_value_kind(engine: Engine) -> None:
+    """Idempotent: add ``value_kind`` to ``data_quality_cluster_golden_values``.
+
+    Pre-existing golden picks were all scalar (single chosen value), so
+    we default the new column to 'scalar' — the multi-value 'array' path
+    is opt-in via the "keep all variants" UI. Skips when the table or
+    column does not need migration so it stays cheap on fresh DBs."""
+    inspector = inspect(engine)
+    if "data_quality_cluster_golden_values" not in inspector.get_table_names():
+        return
+    existing_cols = {
+        c["name"] for c in inspector.get_columns("data_quality_cluster_golden_values")
+    }
+    if "value_kind" not in existing_cols:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE data_quality_cluster_golden_values "
+                    "ADD COLUMN value_kind VARCHAR NOT NULL DEFAULT 'scalar'"
+                )
+            )
+
+
 def init_db(engine: Engine) -> None:
     """Create tables if missing and seed the project_types catalog. Idempotent."""
     # Late import to avoid a circular dep: models imports Base from this module.
@@ -161,6 +238,11 @@ def init_db(engine: Engine) -> None:
     _migrate_dataset_annotation_columns(engine)
     _migrate_dataset_config_column(engine)
     Base.metadata.create_all(engine)
+    # Post-create_all migrations: these add columns to tables that
+    # create_all establishes but cannot retro-fit on dev DBs that
+    # pre-date the column. On fresh DBs they're no-ops.
+    _migrate_cluster_fingerprint(engine)
+    _migrate_golden_value_kind(engine)
 
     factory = sessionmaker(bind=engine)
     with factory() as db:

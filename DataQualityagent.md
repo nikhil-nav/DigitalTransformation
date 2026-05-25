@@ -88,3 +88,10 @@ Date: 08/15/2025, 15-Aug-2025, 2025.08.15 → 2025-08-15
 
 ### US 3.6- Similarity Scoring Output
 #### Peform grouping  and clustering  of records basis the highest similarity score , for important columns(fields), configured during profiling setup and configuration US 3.3. This should be displayed along with other dq dimensioning metrics , on the dashboard page.
+
+### US 3.7- Tree Structure for Similar records
+#### Create a tree structure to represent a superset of the record. The tree should only have unique attributes for the similar records and must represent a hierarchy,based on type of attributes. The top node of the tree strucutre should be the Important column.
+
+### US 3.8- If all the duplicate account names are kept in the golden record, then generate the tree structure for each account name. This should link to a Master Record with <Account Name-Parent> tag
+
+### US 3.9- Use cytoscape library to generate the golden record tree structure

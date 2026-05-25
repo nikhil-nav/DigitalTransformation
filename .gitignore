@@ -27,6 +27,12 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Transient dev-server stdout/stderr captures (from start-process redirects).
+backend/uvicorn.log
+backend/uvicorn.log.err
+frontend/next-dev.log
+frontend/next-dev.log.err
+
 # ---------------------------------------------------------------------------
 # Runtime data (user uploads + sqlite DB). NEVER commit — contains real
 # customer / dataset content and a writable per-environment database.
