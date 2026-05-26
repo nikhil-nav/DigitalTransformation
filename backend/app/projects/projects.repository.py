@@ -1,7 +1,7 @@
 """Projects repository — SQLAlchemy queries only. No FastAPI imports allowed."""
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 # Import models via the package (models are loaded eagerly in __init__.py)
 from app.projects import Project, ProjectType, ValueDiscoveryOpportunity
@@ -22,6 +22,7 @@ def get_user_project(db: Session, project_id: int, user_id: int) -> Project | No
 def list_user_projects(db: Session, user_id: int) -> list[Project]:
     return (
         db.query(Project)
+        .options(joinedload(Project.project_type))
         .filter_by(user_id=user_id)
         .order_by(Project.created_at.desc())
         .all()

@@ -1,12 +1,30 @@
 services:
+  db:
+    image: postgres:16
+    env_file: backend/.env
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - dt-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   backend:
     build: ./backend
     ports:
       - "8000:8000"
-    volumes:
-      - dt-data:/app/data
+    env_file: backend/.env
     environment:
-      - DT_DATA_DIR=/app/data
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -20,4 +38,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  dt-data:
+  dt-pgdata:

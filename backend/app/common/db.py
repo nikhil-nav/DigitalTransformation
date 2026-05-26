@@ -2,7 +2,10 @@ import os
 from collections.abc import Generator
 from pathlib import Path
 
-from sqlalchemy import create_engine, event, inspect, text
+from dotenv import load_dotenv
+from sqlalchemy import create_engine
+
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -11,27 +14,16 @@ class Base(DeclarativeBase):
     pass
 
 
-def _data_dir() -> Path:
-    return Path(os.environ.get("DT_DATA_DIR", str(Path(__file__).parent.parent.parent / "data")))
-
-
 def database_url() -> str:
-    d = _data_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    return f"sqlite:///{(d / 'dt.db').as_posix()}"
-
-
-@event.listens_for(Engine, "connect")
-def _enable_foreign_keys(dbapi_connection, _connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON")
-    cursor.close()
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL environment variable is required")
+    return url
 
 
 def make_engine(url: str | None = None) -> Engine:
     return create_engine(
-        url or database_url(),
-        connect_args={"check_same_thread": False},
+        url if url is not None else database_url(),
         future=True,
     )
 
@@ -73,76 +65,19 @@ PROJECT_TYPE_SEED = [
 ]
 
 
-def _migrate_chat_tables(engine: Engine) -> None:
-    """One-shot SQLite migration: bcm_chat_threads/messages -> chat_threads/messages."""
-    inspector = inspect(engine)
-    existing_tables = set(inspector.get_table_names())
-
-    with engine.begin() as conn:
-        if "bcm_chat_threads" in existing_tables and "chat_threads" not in existing_tables:
-            conn.execute(text("ALTER TABLE bcm_chat_threads RENAME TO chat_threads"))
-            conn.execute(
-                text("ALTER TABLE chat_threads ADD COLUMN scope VARCHAR NOT NULL DEFAULT 'bcm'")
-            )
-
-        if "bcm_chat_messages" in existing_tables and "chat_messages" not in existing_tables:
-            conn.execute(text("ALTER TABLE bcm_chat_messages RENAME TO chat_messages"))
-            conn.execute(
-                text("ALTER TABLE chat_messages ADD COLUMN scope VARCHAR NOT NULL DEFAULT 'bcm'")
-            )
-            conn.execute(text("DROP INDEX IF EXISTS ix_bcm_chat_project_created"))
-            conn.execute(text("DROP INDEX IF EXISTS ix_bcm_chat_thread_created"))
-
-
-def _migrate_dataset_annotation_columns(engine: Engine) -> None:
-    """Idempotent: add Part-5 annotation columns to data_quality_datasets if missing."""
-    inspector = inspect(engine)
-    if "data_quality_datasets" not in inspector.get_table_names():
-        return
-    existing_cols = {c["name"] for c in inspector.get_columns("data_quality_datasets")}
-    with engine.begin() as conn:
-        if "annotation_status" not in existing_cols:
-            conn.execute(
-                text(
-                    "ALTER TABLE data_quality_datasets "
-                    "ADD COLUMN annotation_status VARCHAR NOT NULL DEFAULT 'pending'"
-                )
-            )
-        if "annotation_error" not in existing_cols:
-            conn.execute(
-                text("ALTER TABLE data_quality_datasets ADD COLUMN annotation_error TEXT")
-            )
-        if "annotated_at" not in existing_cols:
-            conn.execute(
-                text("ALTER TABLE data_quality_datasets ADD COLUMN annotated_at DATETIME")
-            )
-
-
-def _migrate_dataset_config_column(engine: Engine) -> None:
-    """Idempotent: add Epic 3 `config_completed_at` to data_quality_datasets."""
-    inspector = inspect(engine)
-    if "data_quality_datasets" not in inspector.get_table_names():
-        return
-    existing_cols = {c["name"] for c in inspector.get_columns("data_quality_datasets")}
-    if "config_completed_at" not in existing_cols:
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "ALTER TABLE data_quality_datasets "
-                    "ADD COLUMN config_completed_at DATETIME"
-                )
-            )
-
-
 def init_db(engine: Engine) -> None:
-    """Create tables if missing and seed the project_types catalog. Idempotent."""
-    # Late import to avoid circular deps: models import Base from this module.
+    """Run Alembic migrations to head and seed the project_types catalog. Idempotent."""
+    # Late imports: avoid circular deps (models import Base from this module) and
+    # avoid startup failures in test environments where alembic.ini may not exist.
+    import alembic.command
+    import alembic.config
+
     from app.models import ChatMessage, ChatThread, ProjectType
 
-    _migrate_chat_tables(engine)
-    _migrate_dataset_annotation_columns(engine)
-    _migrate_dataset_config_column(engine)
-    Base.metadata.create_all(engine)
+    alembic_ini = Path(__file__).parent.parent.parent / "alembic.ini"
+    alembic_cfg = alembic.config.Config(str(alembic_ini))
+    alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+    alembic.command.upgrade(alembic_cfg, "head")
 
     factory = sessionmaker(bind=engine)
     with factory() as db:

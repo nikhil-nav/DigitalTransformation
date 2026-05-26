@@ -42,6 +42,9 @@ backend/data/
 .env
 .env.*
 !.env.example
+# Explicit: backend-level secrets file (covered by .env above, listed for clarity)
+backend/.env
+!backend/.env.example
 *.pem
 *.key
 credentials*.json
