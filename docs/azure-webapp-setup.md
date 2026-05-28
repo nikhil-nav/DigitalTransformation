@@ -66,7 +66,31 @@ Copy and save these three values — you will need them in Step 4.
 
 ---
 
-## Step 2 — Create the Azure App Service plan
+## Step 2 — Allow Azure App Service to reach PostgreSQL
+
+The backend connects to Azure Database for PostgreSQL. By default the firewall blocks all Azure traffic — add a rule to permit it:
+
+```bash
+az postgres flexible-server firewall-rule create \
+  --name propelpgdevdb \
+  --resource-group rg-propel-dev \
+  --rule-name AllowAzureServices \
+  --start-ip-address 0.0.0.0 \
+  --end-ip-address 0.0.0.0
+```
+
+Verify the rule exists:
+
+```bash
+az postgres flexible-server firewall-rule list \
+  --name propelpgdevdb \
+  --resource-group rg-propel-dev \
+  --output table
+```
+
+---
+
+## Step 3 — Create the Azure App Service plan
 
 ```bash
 az appservice plan create \
@@ -80,7 +104,7 @@ Use `--sku B2` or higher if you need more memory/CPU.
 
 ---
 
-## Step 3 — Create the Web App (container)
+## Step 4 — Create the Web App (container)
 
 ```bash
 az webapp create \
@@ -110,18 +134,25 @@ az webapp config container set \
   --container-registry-password "$ACR_PASSWORD"
 ```
 
-### Set the listening port (FastAPI runs on 8000)
+### Set app settings (port + database)
+
+Azure PostgreSQL enforces SSL — include `?sslmode=require` in the connection string:
 
 ```bash
 az webapp config appsettings set \
   --name digital-transformation-dev-backend \
   --resource-group rg-propel-dev \
-  --settings WEBSITES_PORT=8000
+  --settings \
+    WEBSITES_PORT=8000 \
+    DATABASE_URL="postgresql://dev_user:PropelUser123@propelpgdevdb.postgres.database.azure.com:5432/digital_transformation_dev?sslmode=require" \
+    POSTGRES_USER="dev_user" \
+    POSTGRES_PASSWORD="PropelUser123" \
+    POSTGRES_DB="digital_transformation_dev"
 ```
 
 ---
 
-## Step 4 — Create a Service Principal for GitHub Actions
+## Step 5 — Create a Service Principal for GitHub Actions
 
 The `AZURE_CREDENTIALS` secret gives the workflow permission to call `azure/login` and `azure/webapps-deploy`.
 
@@ -156,7 +187,7 @@ Copy the **entire JSON block** — this is the value for `AZURE_CREDENTIALS`.
 
 ---
 
-## Step 5 — Set GitHub secrets
+## Step 6 — Set GitHub secrets
 
 Replace `<owner>/<repo>` with your actual GitHub repository (e.g. `Navikenz/DigitalTransformation`).
 
@@ -185,12 +216,12 @@ gh secret set AZURE_WEBAPP_NAME \
   --repo "$REPO" \
   --body "digital-transformation-dev-backend"
 
-# Paste the full JSON block from Step 4 when prompted
+# Paste the full JSON block from Step 5 when prompted
 gh secret set AZURE_CREDENTIALS \
   --repo "$REPO"
 ```
 
-The last command opens an editor (or reads from stdin). Paste the full JSON block from Step 4, then save/close.
+The last command opens an editor (or reads from stdin). Paste the full JSON block from Step 5, then save/close.
 
 Alternatively, pipe it directly:
 
@@ -208,7 +239,7 @@ gh secret set AZURE_CREDENTIALS \
 
 ---
 
-## Step 6 — Verify secrets are set
+## Step 7 — Verify secrets are set
 
 ```bash
 gh secret list --repo "$REPO"
@@ -226,7 +257,7 @@ AZURE_WEBAPP_NAME   Updated ...
 
 ---
 
-## Step 7 — Trigger the workflow
+## Step 8 — Trigger the workflow
 
 Push any change to `backend/` on the `main` or `develop` branch:
 
@@ -253,11 +284,28 @@ https://digital-transformation-dev-backend.azurewebsites.net
 
 | Symptom | Check |
 |---------|-------|
-| `unauthorized` on ACR push | Admin account not enabled — re-run the `az acr update --admin-enabled true` command |
+| Exit code 127 on container start | `entrypoint.sh` not copied into image — ensure `COPY entrypoint.sh ./` is in `backend/Dockerfile` |
+| `DATABASE_URL` not set / app crashes at startup | Set via `az webapp config appsettings set` (see Step 4) |
+| PostgreSQL connection refused | Firewall rule missing — re-run Step 2 |
+| PostgreSQL SSL error | Add `?sslmode=require` to `DATABASE_URL` (Azure PostgreSQL enforces SSL) |
+| `unauthorized` on ACR push | Admin account not enabled — re-run `az acr update --admin-enabled true` |
 | `App Service plan not found` | Verify `asp-digitrans-dev` exists: `az appservice plan list -g rg-propel-dev -o table` |
-| Container fails to start | Check logs: `az webapp log tail --name digital-transformation-dev-backend --resource-group rg-propel-dev` |
+| Container logs empty | Download full logs: `az webapp log download --name digital-transformation-dev-backend --resource-group rg-propel-dev --log-file /tmp/logs.zip` |
 | `WEBSITES_PORT` mismatch | Confirm app setting is `8000` to match FastAPI's `EXPOSE 8000` |
 | Service principal permission denied | Ensure the SP has `Contributor` on `rg-propel-dev` and also `AcrPush` on the ACR |
+
+### Get container logs
+
+```bash
+az webapp log download \
+  --name digital-transformation-dev-backend \
+  --resource-group rg-propel-dev \
+  --log-file /tmp/backend-logs.zip
+
+unzip -o /tmp/backend-logs.zip -d /tmp/backend-logs/
+cat /tmp/backend-logs/LogFiles/StartupLogs/*_failure.log
+cat /tmp/backend-logs/LogFiles/*_docker.log | tail -100
+```
 
 ### Grant AcrPush to the service principal (if needed)
 
@@ -281,4 +329,4 @@ az role assignment create \
 | `ACR_USERNAME` | `az acr credential show --query username` |
 | `ACR_PASSWORD` | `az acr credential show --query "passwords[0].value"` |
 | `AZURE_CREDENTIALS` | JSON from `az ad sp create-for-rbac --sdk-auth` |
-| `AZURE_WEBAPP_NAME` | `digital-transformation-dev-backend` (name chosen in Step 3) |
+| `AZURE_WEBAPP_NAME` | `digital-transformation-dev-backend` (name chosen in Step 4) |
