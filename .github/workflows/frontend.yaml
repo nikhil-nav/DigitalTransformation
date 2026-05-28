@@ -43,6 +43,8 @@ jobs:
           tags: |
             ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
             ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            BACKEND_URL=${{ secrets.BACKEND_URL }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
