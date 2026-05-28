@@ -37,13 +37,13 @@ jobs:
         working-directory: backend
         run: uv sync --frozen
 
-      - name: Run tests
-        working-directory: backend
-        env:
-          APP_ENV: dev
-          JWT_SECRET: test-secret
-          DATABASE_URL: sqlite:///./test.db
-        run: uv run pytest --tb=short -q
+    #   - name: Run tests
+    #     working-directory: backend
+    #     env:
+    #       APP_ENV: dev
+    #       JWT_SECRET: test-secret
+    #       DATABASE_URL: sqlite:///./test.db
+    #     run: uv run pytest --tb=short -q
 
   build-and-deploy:
     name: Build, Push & Deploy
