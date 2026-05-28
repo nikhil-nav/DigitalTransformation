@@ -4,6 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import app.common.db as _db_module
 from app import auth
 from app.db import get_db, init_db
 from app.llm.session import session_keys as llm_session_keys
@@ -41,6 +42,11 @@ def _wire_app(engine, tmp_path, monkeypatch):
     to the real engine doesn't pollute the developer's filesystem.
     """
     monkeypatch.setenv("DT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    # Reset cached engine/session-factory so the monkeypatched DATABASE_URL takes effect
+    # if get_engine() is called via the app lifespan.
+    _db_module._engine = None
+    _db_module._session_factory = None
     auth.sessions.clear()
     llm_session_keys.clear()
 
