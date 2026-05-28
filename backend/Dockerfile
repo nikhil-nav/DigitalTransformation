@@ -17,6 +17,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Install the project itself.
 COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./
 COPY entrypoint.sh ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
