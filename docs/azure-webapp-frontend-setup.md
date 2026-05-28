@@ -1,6 +1,8 @@
 # Azure Web App Setup — Frontend Container Deployment
 
-This guide covers creating the GitHub Actions workflow for the frontend and provisioning the Azure App Service, mirroring the backend setup.
+This guide covers provisioning the Azure App Service for the frontend and wiring GitHub secrets so the CI/CD workflow builds, pushes, and deploys the Next.js container automatically.
+
+The workflow file `.github/workflows/frontend.yaml` is already committed to the repo. The Azure Web App `digital-transformation-dev-frontend` is already created. This doc serves as a reference and re-creation guide.
 
 ---
 
@@ -21,91 +23,50 @@ gh auth login
 |------|-------|
 | Resource Group | `rg-propel-dev` |
 | ACR name | `navikenzpropeldev` |
+| App Service plan | `asp-digitrans-dev` (shared with backend) |
 | Docker image name | `plan-digital-transformation-dev-frontend` |
 | Frontend port | `3000` |
+| Frontend App Service | `digital-transformation-dev-frontend` |
 | Backend App Service URL | `https://digital-transformation-dev-backend.azurewebsites.net` |
-| GitHub repo | `<owner>/<repo>` — replace in commands below |
+| GitHub repo | `Navikenz/DigitalTransformation` |
 
 ---
 
-## Step 1 — Create the GitHub Actions workflow
+## How BACKEND_URL works
 
-Create `.github/workflows/frontend.yaml`:
+`frontend/next.config.ts` reads `BACKEND_URL` at server startup and uses it to proxy all `/api/*` requests to the backend:
 
-```yaml
-name: Frontend CI/CD
+```ts
+const backend = process.env.BACKEND_URL ?? "http://localhost:8000";
 
-on:
-  push:
-    branches: [main, develop]
-    paths:
-      - "frontend/**"
-      - ".github/workflows/frontend.yaml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "frontend/**"
-      - ".github/workflows/frontend.yaml"
-
-env:
-  IMAGE_NAME: plan-digital-transformation-dev-frontend
-
-jobs:
-  build-and-deploy:
-    name: Build, Push & Deploy
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Azure Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.ACR_LOGIN_SERVER }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
-
-      - name: Build and push image to ACR
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          push: true
-          tags: |
-            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Log in to Azure
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Deploy to Azure App Service
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ secrets.AZURE_FRONTEND_WEBAPP_NAME }}
-          images: ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+rewrites: () => [{ source: "/api/:path*", destination: `${backend}/api/:path*` }]
 ```
 
-> The frontend workflow reuses the same `ACR_*` and `AZURE_CREDENTIALS` secrets as the backend. Only `AZURE_FRONTEND_WEBAPP_NAME` is new.
+Setting `BACKEND_URL` as an Azure App Service app setting injects it at runtime — no rebuild needed when the backend URL changes.
+
+---
+
+## Step 1 — GitHub Actions workflow
+
+The file `.github/workflows/frontend.yaml` is already in the repo. It:
+- Triggers on pushes to `main`/`develop` that touch `frontend/**`
+- Builds the Docker image from `./frontend`
+- Pushes two tags to ACR: `sha-<commit>` and `latest`
+- Deploys the SHA-tagged image to `AZURE_FRONTEND_WEBAPP_NAME`
+
+Reuses the same `ACR_*` and `AZURE_CREDENTIALS` secrets as the backend. Only `AZURE_FRONTEND_WEBAPP_NAME` is new.
 
 ---
 
 ## Step 2 — Create the App Service plan
 
-Skip this step if `asp-digitrans-dev` already exists from the backend setup. Verify first:
+Skip if `asp-digitrans-dev` already exists (it does if the backend is set up). Verify:
 
 ```bash
 az appservice plan list --resource-group rg-propel-dev --output table
 ```
 
-If it does not exist, create it:
+If missing, create it:
 
 ```bash
 az appservice plan create \
@@ -148,28 +109,24 @@ az webapp config container set \
 
 ### Set the listening port and backend URL
 
-Next.js listens on port 3000. The `BACKEND_URL` env var points the frontend proxy at the backend App Service:
-
 ```bash
 az webapp config appsettings set \
   --name digital-transformation-dev-frontend \
   --resource-group rg-propel-dev \
   --settings \
     WEBSITES_PORT=3000 \
-    BACKEND_URL=https://digital-transformation-dev-backend.azurewebsites.net
+    BACKEND_URL="https://digital-transformation-dev-backend.azurewebsites.net"
 ```
 
 ---
 
-## Step 4 — Set the new GitHub secret
+## Step 4 — Set the GitHub secret
 
 The backend setup already added `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`, and `AZURE_CREDENTIALS`. Only one new secret is needed:
 
 ```bash
-REPO="<owner>/<repo>"
-
 gh secret set AZURE_FRONTEND_WEBAPP_NAME \
-  --repo "$REPO" \
+  --repo "Navikenz/DigitalTransformation" \
   --body "digital-transformation-dev-frontend"
 ```
 
@@ -178,7 +135,7 @@ gh secret set AZURE_FRONTEND_WEBAPP_NAME \
 ## Step 5 — Verify all secrets
 
 ```bash
-gh secret list --repo "$REPO"
+gh secret list --repo "Navikenz/DigitalTransformation"
 ```
 
 Expected output (combined with backend secrets):
@@ -205,8 +162,8 @@ git push origin main
 Monitor the run:
 
 ```bash
-gh run list --repo "$REPO" --workflow frontend.yaml
-gh run watch --repo "$REPO"
+gh run list --repo "Navikenz/DigitalTransformation" --workflow frontend.yaml
+gh run watch --repo "Navikenz/DigitalTransformation"
 ```
 
 After a successful run, the app is live at:
@@ -222,10 +179,39 @@ https://digital-transformation-dev-frontend.azurewebsites.net
 | Symptom | Check |
 |---------|-------|
 | `unauthorized` on ACR push | Admin account not enabled — `az acr update --name navikenzpropeldev --admin-enabled true` |
-| Container fails to start | Check logs: `az webapp log tail --name digital-transformation-dev-frontend --resource-group rg-propel-dev` |
+| Container fails to start (exit 127) | Check `entrypoint.sh` or startup command is present in the image |
+| Container fails to start (exit 255) | Download logs and check the failure log (see below) |
 | `WEBSITES_PORT` mismatch | Confirm app setting is `3000` to match Next.js `EXPOSE 3000` |
-| `/api/*` calls fail | Verify `BACKEND_URL` app setting points to the backend App Service URL |
+| `/api/*` calls return 502/timeout | Verify `BACKEND_URL` app setting: `az webapp config appsettings list --name digital-transformation-dev-frontend --resource-group rg-propel-dev --output table` |
 | `App Service plan not found` | Verify `asp-digitrans-dev` exists: `az appservice plan list -g rg-propel-dev -o table` |
+
+### Get container logs
+
+```bash
+az webapp log download \
+  --name digital-transformation-dev-frontend \
+  --resource-group rg-propel-dev \
+  --log-file /tmp/frontend-logs.zip
+
+unzip -o /tmp/frontend-logs.zip -d /tmp/frontend-logs/
+cat /tmp/frontend-logs/LogFiles/StartupLogs/*_failure.log
+cat /tmp/frontend-logs/LogFiles/*_docker.log | tail -100
+```
+
+### Update BACKEND_URL without redeploying
+
+If the backend URL changes, update the app setting and restart — no image rebuild needed:
+
+```bash
+az webapp config appsettings set \
+  --name digital-transformation-dev-frontend \
+  --resource-group rg-propel-dev \
+  --settings BACKEND_URL="https://<new-backend-url>"
+
+az webapp restart \
+  --name digital-transformation-dev-frontend \
+  --resource-group rg-propel-dev
+```
 
 ---
 
