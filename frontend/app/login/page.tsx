@@ -6,7 +6,6 @@ import { getSessionUser } from "@/lib/session";
 export default async function LoginPage() {
   const user = await getSessionUser();
   if (user) {
-    // trigger
     redirect("/");
   }
 
