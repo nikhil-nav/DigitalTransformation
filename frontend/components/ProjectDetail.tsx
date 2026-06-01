@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import BcmSection from "./BcmSection";
 import DataQualitySection from "./DataQualitySection";
+import ITMapSection from "./ITMapSection";
 
 export default function ProjectDetail({ projectId }: { projectId: number }) {
   const router = useRouter();
@@ -192,7 +193,10 @@ export default function ProjectDetail({ projectId }: { projectId: number }) {
       </div>
 
       {project.project_type.code === "value_discovery" && (
-        <BcmSection projectId={projectId} />
+        <>
+          <BcmSection projectId={projectId} />
+          <ITMapSection projectId={projectId} />
+        </>
       )}
 
       {project.project_type.code === "data_quality_assessment" && (

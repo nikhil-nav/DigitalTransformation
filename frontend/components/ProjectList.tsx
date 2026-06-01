@@ -40,7 +40,9 @@ export default function ProjectList() {
       )}
 
       {projects !== null && projects.length === 0 && (
-        <p className="meta">No projects yet. Create your first to get started.</p>
+        <div className="empty-state">
+          No projects yet. Create your first to get started.
+        </div>
       )}
 
       {projects !== null && projects.length > 0 && (

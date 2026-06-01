@@ -469,7 +469,7 @@ function buildDistributionChart(
         },
       ],
       layout: {
-        xaxis: { showgrid: true, gridcolor: "#eaf0f6" },
+        xaxis: { showgrid: true, gridcolor: "#dde4ec" },
         yaxis: { visible: false, range: [0, 2] },
         showlegend: false,
       },
@@ -512,7 +512,7 @@ function buildDistributionChart(
       },
     ],
     layout: {
-      xaxis: { showgrid: true, gridcolor: "#eaf0f6" },
+      xaxis: { showgrid: true, gridcolor: "#dde4ec" },
       yaxis: { automargin: true, autorange: "reversed" },
     },
   };
