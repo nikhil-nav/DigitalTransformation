@@ -33,6 +33,7 @@ DataQualityColumnMapping = _models_mod.DataQualityColumnMapping
 DataQualitySimilarityRun = _models_mod.DataQualitySimilarityRun
 DataQualityRecordCluster = _models_mod.DataQualityRecordCluster
 DataQualityRecordPair = _models_mod.DataQualityRecordPair
+DataQualityClusterGoldenValue = _models_mod.DataQualityClusterGoldenValue
 DQ_RAG_VALUES = _models_mod.DQ_RAG_VALUES
 DQ_SEVERITY_VALUES = _models_mod.DQ_SEVERITY_VALUES
 DQ_ISSUE_DIMENSIONS = _models_mod.DQ_ISSUE_DIMENSIONS

@@ -17,12 +17,20 @@ from app.data_quality import (
     DataQualitySimilarityRun,
     DataQualityRecordCluster,
     DataQualityRecordPair,
+    DataQualityClusterGoldenValue,
     DQ_RAG_VALUES,
     DQ_SEVERITY_VALUES,
     DQ_ISSUE_DIMENSIONS,
     DQ_AI_STATUSES,
     DQ_RELATIONSHIP_STATUSES,
     DQ_RELATIONSHIP_CARDINALITIES,
+)
+from app.it_map.models import (
+    ApplicationInventory,
+    ApplicationInventorySchema,
+    Application,
+    ApplicationCapabilityMapping,
+    ITMapAgentRun,
 )
 
 __all__ = [
@@ -47,10 +55,16 @@ __all__ = [
     "DataQualitySimilarityRun",
     "DataQualityRecordCluster",
     "DataQualityRecordPair",
+    "DataQualityClusterGoldenValue",
     "DQ_RAG_VALUES",
     "DQ_SEVERITY_VALUES",
     "DQ_ISSUE_DIMENSIONS",
     "DQ_AI_STATUSES",
     "DQ_RELATIONSHIP_STATUSES",
     "DQ_RELATIONSHIP_CARDINALITIES",
+    "ApplicationInventory",
+    "ApplicationInventorySchema",
+    "Application",
+    "ApplicationCapabilityMapping",
+    "ITMapAgentRun",
 ]

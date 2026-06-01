@@ -511,12 +511,21 @@ class DataQualityRecordCluster(Base):
             return []
         return [int(i) for i in v] if isinstance(v, list) else []
 
+    fingerprint: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+
     __table_args__ = (
         Index(
             "ix_dq_cluster_run_index",
             "run_id",
             "cluster_index",
             unique=True,
+        ),
+        Index(
+            "ix_dq_cluster_run_fingerprint",
+            "run_id",
+            "fingerprint",
         ),
     )
 
@@ -551,3 +560,60 @@ class DataQualityRecordPair(Base):
         if not isinstance(v, dict):
             return {}
         return {str(k): float(val) for k, val in v.items()}
+
+
+class DataQualityClusterGoldenValue(Base):
+    """User-picked canonical value(s) for a single column within a cluster.
+
+    Keyed on ``(dataset_id, cluster_fingerprint, column_name)`` — NOT on
+    cluster_id — so re-running similarity preserves picks for clusters
+    whose member set is unchanged. The fingerprint is computed from
+    sorted member row indices; when membership shifts on a re-run the
+    fingerprint shifts too, the old picks are no longer matched, and
+    the tree starts fresh (rather than silently inheriting potentially-
+    stale choices).
+
+    ``value_kind`` distinguishes how to interpret ``chosen_value``:
+      - ``'scalar'`` — ``chosen_value`` holds the raw string the user
+        picked (or NULL when they explicitly chose the empty/null variant).
+      - ``'array'`` — the user picked "keep all variants"; ``chosen_value``
+        holds a JSON-encoded list of raw strings. Storing the kind
+        explicitly keeps the scalar path unchanged for legacy rows and
+        avoids ambiguity with scalar values that happen to look like JSON.
+
+    To revert a leaf to the engine's auto-pick, DELETE the row rather
+    than nulling it out — a NULL ``chosen_value`` with kind ``'scalar'``
+    means "user explicitly chose null", which is distinct from "no pick".
+    """
+
+    __tablename__ = "data_quality_cluster_golden_values"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("data_quality_datasets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    cluster_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    column_name: Mapped[str] = mapped_column(String, nullable=False)
+    chosen_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_kind: Mapped[str] = mapped_column(
+        String, nullable=False, default="scalar", server_default="scalar"
+    )
+    chosen_at: Mapped[datetime] = mapped_column(
+        default=_now, onupdate=_now, nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "value_kind IN ('scalar','array')",
+            name="ck_dq_golden_value_kind",
+        ),
+        Index(
+            "ix_dq_golden_unique",
+            "dataset_id",
+            "cluster_fingerprint",
+            "column_name",
+            unique=True,
+        ),
+    )

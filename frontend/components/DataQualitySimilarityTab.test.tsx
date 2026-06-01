@@ -158,14 +158,15 @@ describe("DataQualitySimilarityTab", () => {
       screen.getAllByRole("button", { name: /view cluster/i })[0],
     );
 
-    // Modal opened
+    // Modal opened — default tab is "Members", so the row content is visible.
     const dialog = await screen.findByRole("dialog", {
       name: /cluster detail/i,
     });
     expect(within(dialog).getByText("ACME ROBOTICS INC")).toBeInTheDocument();
-    // Per-column score breakdown chip rendered inside the dialog (the same
-    // value also appears on the cluster row behind the modal — scope to
-    // the dialog to disambiguate).
+    // The per-column score chip lives on the "Pair scores" tab now.
+    await user.click(
+      within(dialog).getByRole("tab", { name: /pair scores/i }),
+    );
     expect(within(dialog).getByText("0.970")).toBeInTheDocument();
   });
 

@@ -12,6 +12,7 @@ export default async function LoginPage() {
 
   return (
     <main className="login-main">
+      <img src="/navikenz_logo.png" alt="Navikenz" className="login-logo" />
       <LoginForm />
     </main>
   );

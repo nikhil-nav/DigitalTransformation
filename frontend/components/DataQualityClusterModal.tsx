@@ -6,6 +6,10 @@ import { useEffect, useState } from "react";
 import { api, ApiError, type DqClusterDetail } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+import DataQualityClusterTreeView from "./DataQualityClusterTreeView";
+
+type TabKey = "members" | "pairs" | "tree";
+
 function scoreChipClass(score: number): string {
   return cn(
     "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold",
@@ -34,6 +38,9 @@ export default function DataQualityClusterModal({
 }) {
   const [detail, setDetail] = useState<DqClusterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Default tab is Members so existing behavior is preserved on first
+  // open; the Tree and Pair-scores tabs are opt-in.
+  const [activeTab, setActiveTab] = useState<TabKey>("members");
 
   useEffect(() => {
     let cancelled = false;
@@ -101,20 +108,43 @@ export default function DataQualityClusterModal({
           </button>
         </header>
 
+        {/* Tabs */}
+        <div
+          role="tablist"
+          aria-label="Cluster detail sections"
+          className="flex items-center gap-1 border-b border-[var(--geyser)] bg-[var(--fog)] px-2"
+        >
+          <TabButton
+            label="Members"
+            active={activeTab === "members"}
+            onClick={() => setActiveTab("members")}
+          />
+          <TabButton
+            label="Pair scores"
+            active={activeTab === "pairs"}
+            onClick={() => setActiveTab("pairs")}
+          />
+          <TabButton
+            label="Tree"
+            active={activeTab === "tree"}
+            onClick={() => setActiveTab("tree")}
+          />
+        </div>
+
         <div className="flex-1 overflow-y-auto px-4 py-4">
           {error && (
             <p role="alert" className="text-sm text-[var(--watermelon)]">
               {error}
             </p>
           )}
-          {!error && !detail && (
+          {!error && !detail && activeTab !== "tree" && (
             <div className="flex items-center gap-2 text-sm text-[var(--slate)]">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading cluster
               members...
             </div>
           )}
 
-          {detail && (
+          {activeTab === "members" && detail && (
             <div className="flex flex-col gap-4">
               {sheetA === sheetB ? (
                 // Within-sheet dedup: every member is a row in the same
@@ -148,67 +178,108 @@ export default function DataQualityClusterModal({
                   />
                 </>
               )}
-
-              <div>
-                <h4 className="m-0 mb-2 text-sm font-semibold text-[var(--pickled-bluewood)]">
-                  Pair-by-pair scores
-                </h4>
-                <table className="w-full border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b border-[var(--geyser)] text-left text-[var(--slate)]">
-                      <th className="px-2 py-1.5 font-medium">A row</th>
-                      <th className="px-2 py-1.5 font-medium">B row</th>
-                      <th className="px-2 py-1.5 font-medium">Overall</th>
-                      <th className="px-2 py-1.5 font-medium">By column</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.pairs.map((p) => (
-                      <tr
-                        key={p.id}
-                        className="border-b border-[var(--geyser)]"
-                      >
-                        <td className="px-2 py-1.5 font-mono text-[10px]">
-                          {p.row_a_index}
-                        </td>
-                        <td className="px-2 py-1.5 font-mono text-[10px]">
-                          {p.row_b_index}
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <span className={scoreChipClass(p.score)}>
-                            {p.score.toFixed(3)}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <span className="flex flex-wrap gap-1">
-                            {Object.entries(p.per_column_scores).map(
-                              ([k, v]) => (
-                                <span
-                                  key={k}
-                                  className="inline-flex items-center gap-1 rounded-full bg-[var(--fog)] px-1.5 py-0.5 text-[10px]"
-                                  title={k}
-                                >
-                                  <span className="text-[var(--slate)]">
-                                    {k.split("|")[0]}
-                                  </span>
-                                  <span className={scoreChipClass(v)}>
-                                    {v.toFixed(2)}
-                                  </span>
-                                </span>
-                              ),
-                            )}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
             </div>
+          )}
+
+          {activeTab === "pairs" && detail && (
+            <div>
+              <h4 className="m-0 mb-2 text-sm font-semibold text-[var(--pickled-bluewood)]">
+                Pair-by-pair scores
+              </h4>
+              <table className="w-full border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[var(--geyser)] text-left text-[var(--slate)]">
+                    <th className="px-2 py-1.5 font-medium">A row</th>
+                    <th className="px-2 py-1.5 font-medium">B row</th>
+                    <th className="px-2 py-1.5 font-medium">Overall</th>
+                    <th className="px-2 py-1.5 font-medium">By column</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.pairs.map((p) => (
+                    <tr
+                      key={p.id}
+                      className="border-b border-[var(--geyser)]"
+                    >
+                      <td className="px-2 py-1.5 font-mono text-[10px]">
+                        {p.row_a_index}
+                      </td>
+                      <td className="px-2 py-1.5 font-mono text-[10px]">
+                        {p.row_b_index}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <span className={scoreChipClass(p.score)}>
+                          {p.score.toFixed(3)}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <span className="flex flex-wrap gap-1">
+                          {Object.entries(p.per_column_scores).map(
+                            ([k, v]) => (
+                              <span
+                                key={k}
+                                className="inline-flex items-center gap-1 rounded-full bg-[var(--fog)] px-1.5 py-0.5 text-[10px]"
+                                title={k}
+                              >
+                                <span className="text-[var(--slate)]">
+                                  {k.split("|")[0]}
+                                </span>
+                                <span className={scoreChipClass(v)}>
+                                  {v.toFixed(2)}
+                                </span>
+                              </span>
+                            ),
+                          )}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Tree tab loads its own data; renders independently of
+              `detail` so the user can hop between tabs without waiting
+              on the members fetch. */}
+          {activeTab === "tree" && (
+            <DataQualityClusterTreeView
+              projectId={projectId}
+              datasetId={datasetId}
+              runId={runId}
+              clusterId={clusterId}
+            />
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+function TabButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "rounded-t border-b-2 px-3 py-1.5 text-xs font-medium transition-colors",
+        active
+          ? "border-[var(--pickled-bluewood)] bg-white text-[var(--pickled-bluewood)]"
+          : "border-transparent text-[var(--slate)] hover:bg-white hover:text-[var(--pickled-bluewood)]",
+      )}
+    >
+      {label}
+    </button>
   );
 }
 

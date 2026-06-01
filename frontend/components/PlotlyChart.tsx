@@ -61,7 +61,7 @@ export default function PlotlyChart({
     margin: { l: 36, r: 8, t: 8, b: 32 },
     font: {
       family: '-apple-system, "Segoe UI", Roboto, sans-serif',
-      color: "#33475b",
+      color: "#1e3a52",
       size: 11,
     },
     paper_bgcolor: "rgba(0,0,0,0)",

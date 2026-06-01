@@ -22,6 +22,12 @@ vi.mock("./BcmSection", () => ({
   default: () => <div data-testid="bcm-section" />,
 }));
 
+// Avoid ITMapSection's own fetches consuming the sequential mock slots
+// that the delete/edit tests reserve for project endpoints.
+vi.mock("./ITMapSection", () => ({
+  default: () => <div data-testid="itmap-section" />,
+}));
+
 import ProjectDetail from "./ProjectDetail";
 
 const project = {

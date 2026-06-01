@@ -54,7 +54,7 @@ from app.data_quality.inspect import (
     PasswordProtectedError,
     inspect_workbook,
 )
-from app.data_quality.normalize import NORMALIZE_VERSION
+from app.data_quality.normalize import NORMALIZE_VERSION, Normalizer
 from app.data_quality.profile import profile_dataset
 from app.data_quality.recommend import (
     ColumnFacts,
@@ -62,12 +62,20 @@ from app.data_quality.recommend import (
     recommend_config,
 )
 from app.data_quality.similarity_llm import refine_mappings_with_llm
+from app.data_quality.tree import (
+    ColumnFacts as TreeColumnFacts,
+    ClusterTree,
+    TreeMapping,
+    build_cluster_tree,
+    build_master_record,
+)
 from app.db import get_db
 from app.llm.agent import run_agent_turn_stream
 from app.llm.session import LlmKeys, session_keys
 from app.models import (
     ChatMessage,
     ChatThread,
+    DataQualityClusterGoldenValue,
     DataQualityColumnMapping,
     DataQualityColumnProfile,
     DataQualityDataset,
@@ -87,9 +95,11 @@ from app.schemas import (
     ChatMessageOut,
     DataQualityBoundsUpdate,
     DataQualityClusterDetailOut,
+    DataQualityClusterTreeOut,
     DataQualityConfigDraftOut,
     DataQualityDatasetOut,
     DataQualityFunctionalDependencyOut,
+    DataQualityGoldenValueIn,
     DataQualityIssueOut,
     DataQualityProfileConfigIn,
     DataQualityProfileConfigOut,
@@ -1285,3 +1295,473 @@ def get_cluster_detail(
         "a_rows": a_rows,
         "b_rows": b_rows,
     }
+
+
+# ============================================================================
+# Epic 3 — US 3.7: Tree view + golden-record selection
+# ============================================================================
+
+
+def _load_run_and_cluster(
+    db: Session, dataset: DataQualityDataset, run_id: int, cluster_id: int
+) -> tuple[DataQualitySimilarityRun, DataQualityRecordCluster]:
+    """Shared 404 path for the tree + golden endpoints. Returns both rows
+    or raises HTTPException."""
+    run = (
+        db.query(DataQualitySimilarityRun)
+        .filter_by(id=run_id, dataset_id=dataset.id)
+        .one_or_none()
+    )
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
+    cluster = (
+        db.query(DataQualityRecordCluster)
+        .filter_by(id=cluster_id, run_id=run.id)
+        .one_or_none()
+    )
+    if cluster is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found"
+        )
+    return run, cluster
+
+
+def _column_facts_map(
+    db: Session, dataset_id: int, sheet_name: str
+) -> dict[str, TreeColumnFacts]:
+    """Build the {column_name -> TreeColumnFacts} map the tree builder
+    expects. Drives the semantic-bucket assignment in tree.py."""
+    sheet = (
+        db.query(DataQualitySheetProfile)
+        .filter_by(dataset_id=dataset_id, sheet_name=sheet_name)
+        .one_or_none()
+    )
+    if sheet is None:
+        return {}
+    return {
+        col.name: TreeColumnFacts(
+            semantic_type=col.semantic_type,
+            pattern_label=col.pattern_label,
+            distinct_pct=col.distinct_pct or 0.0,
+        )
+        for col in sheet.columns
+    }
+
+
+def _golden_overrides_for(
+    db: Session, dataset_id: int, fingerprint: str
+) -> tuple[dict[str, str | list[str] | None], set[str]]:
+    """Return (overrides, explicit_columns) for a cluster's saved picks.
+
+    Splitting "explicit" from "value" lets the tree builder distinguish
+    "user chose null" (None in overrides, column in explicit_columns)
+    from "no override saved" (column NOT in explicit_columns).
+
+    Array-kind rows are decoded from JSON; malformed JSON is treated
+    as "no override" for that column so a corrupt row degrades gracefully
+    rather than 500ing the whole tree. The endpoint never writes invalid
+    JSON, so this only fires if the row was hand-edited."""
+    rows = (
+        db.query(DataQualityClusterGoldenValue)
+        .filter_by(dataset_id=dataset_id, cluster_fingerprint=fingerprint)
+        .all()
+    )
+    overrides: dict[str, str | list[str] | None] = {}
+    explicit_columns: set[str] = set()
+    for r in rows:
+        if r.value_kind == "array" and r.chosen_value is not None:
+            try:
+                decoded = json.loads(r.chosen_value)
+            except (TypeError, ValueError):
+                continue  # treat malformed array as no override
+            if not isinstance(decoded, list):
+                continue
+            overrides[r.column_name] = [str(v) for v in decoded]
+        else:
+            overrides[r.column_name] = r.chosen_value
+        explicit_columns.add(r.column_name)
+    return overrides, explicit_columns
+
+
+def _tree_to_dict(tree: ClusterTree) -> dict:
+    """Serialize a ClusterTree dataclass to a dict matching
+    ``DataQualityClusterTreeOut``. Pulled out so the Master Record path
+    (US 3.8) can serialize per-variant subtrees with the same code."""
+    return {
+        "cluster_fingerprint": tree.cluster_fingerprint,
+        "root_column_a": tree.root_column_a,
+        "root_column_b": tree.root_column_b,
+        "root_display_name": tree.root_display_name,
+        "root_value": tree.root_value,
+        "root_is_conflict": tree.root_is_conflict,
+        "root_variants": [
+            {
+                "normalized": v.normalized,
+                "raw": v.raw,
+                "raw_examples": v.raw_examples,
+                "member_count": v.member_count,
+            }
+            for v in tree.root_variants
+        ],
+        "root_chosen_is_explicit": tree.root_chosen_is_explicit,
+        "groups": [
+            {
+                "bucket": g.bucket,
+                "leaves": [
+                    {
+                        "column_a": l.column_a,
+                        "column_b": l.column_b,
+                        "display_name": l.display_name,
+                        "bucket": l.bucket,
+                        "is_important": l.is_important,
+                        "weight": l.weight,
+                        "is_conflict": l.is_conflict,
+                        "variants": [
+                            {
+                                "normalized": v.normalized,
+                                "raw": v.raw,
+                                "raw_examples": v.raw_examples,
+                                "member_count": v.member_count,
+                            }
+                            for v in l.variants
+                        ],
+                        "auto_pick": l.auto_pick,
+                        "chosen": l.chosen,
+                        "chosen_is_explicit": l.chosen_is_explicit,
+                    }
+                    for l in g.leaves
+                ],
+            }
+            for g in tree.groups
+        ],
+        "conflict_count": tree.conflict_count,
+        "resolved_conflict_count": tree.resolved_conflict_count,
+        "master_record": None,  # subtrees never nest a master record
+        "tree_version": tree.tree_version,
+    }
+
+
+def _build_tree_response(
+    db: Session,
+    dataset: DataQualityDataset,
+    run: DataQualitySimilarityRun,
+    cluster: DataQualityRecordCluster,
+) -> "DataQualityClusterTreeOut":
+    """Compose the tree end-to-end: load rows + facts + overrides, run
+    the pure builder(s), serialize via the pydantic schema.
+
+    Dispatches to the Master Record path (US 3.8) when the root column's
+    golden override is a non-empty list — i.e., the user picked "keep
+    all variants" on the root. In that case ``groups`` at the top level
+    is empty and the per-variant subtrees live under ``master_record``.
+    """
+    cfg = _config_or_none(db, dataset.id)
+    if cfg is None or not cfg.mappings:
+        # Should never happen: a run only exists if a config existed at
+        # the time, but a delete-and-recreate flow could orphan the run.
+        # 409 because the data is internally inconsistent rather than
+        # "not found".
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Cluster has no saved similarity config to build the tree "
+                "from. Re-save the config on the Profiling Setup page."
+            ),
+        )
+
+    rows_a = load_sheet_rows(dataset, run.sheet_a, cluster.a_members)
+    rows_b = load_sheet_rows(dataset, run.sheet_b, cluster.b_members)
+    facts_a = _column_facts_map(db, dataset.id, run.sheet_a)
+    facts_b = _column_facts_map(db, dataset.id, run.sheet_b)
+    normalizer = Normalizer.from_toggles(cfg.normalization)
+    overrides, explicit = _golden_overrides_for(
+        db, dataset.id, cluster.fingerprint
+    )
+
+    mappings = [
+        TreeMapping(
+            id=m.id,
+            column_a=m.column_a,
+            column_b=m.column_b,
+            weight=m.weight,
+            is_important=m.is_important,
+        )
+        for m in cfg.mappings
+    ]
+
+    # Build the cluster-wide tree first. This is the "regular" tree shape
+    # the UI shows when root is a scalar pick. We then *also* build the
+    # Master Record when root happens to be an array, and emit the
+    # subtrees alongside an empty top-level groups list.
+    tree = build_cluster_tree(
+        cluster_fingerprint=cluster.fingerprint,
+        mappings=mappings,
+        rows_a=rows_a,
+        rows_b=rows_b,
+        column_facts_a=facts_a,
+        column_facts_b=facts_b,
+        normalizer=normalizer,
+        golden_overrides=overrides,
+        golden_explicit_columns=explicit,
+    )
+
+    payload = _tree_to_dict(tree)
+
+    # US 3.8: when the root mapping has an array override, attach the
+    # Master Record framing. The override is keyed on the root's
+    # column_a; pull it from the cluster-wide overrides we just loaded.
+    root_column = tree.root_column_a
+    root_override = overrides.get(root_column) if root_column in explicit else None
+    if isinstance(root_override, list) and root_override:
+        master = build_master_record(
+            cluster_fingerprint=cluster.fingerprint,
+            kept_variants=root_override,
+            mappings=mappings,
+            rows_a=rows_a,
+            rows_b=rows_b,
+            column_facts_a=facts_a,
+            column_facts_b=facts_b,
+            normalizer=normalizer,
+            golden_overrides=overrides,
+            golden_explicit_columns=explicit,
+        )
+        # Re-aggregate conflict counts across subtrees so the UI's
+        # "N of M conflicts resolved" pill stays meaningful in Master
+        # Record mode. The root itself is counted once (at the top
+        # level), then each subtree's non-root leaves contribute.
+        conflict_count = 1 if tree.root_is_conflict else 0
+        resolved_count = 1 if (tree.root_is_conflict and tree.root_chosen_is_explicit) else 0
+        for st in master.subtrees:
+            sub = st.subtree
+            # Subtract the subtree's own root from its tally — its root
+            # is a single-variant auto-pick under the slice (never a
+            # conflict by construction), so this is a no-op in practice,
+            # but the subtraction keeps the math defensive against a
+            # future change that makes subtree roots conflict-bearing.
+            conflict_count += sub.conflict_count - (1 if sub.root_is_conflict else 0)
+            resolved_count += sub.resolved_conflict_count - (
+                1 if (sub.root_is_conflict and sub.root_chosen_is_explicit) else 0
+            )
+        payload["groups"] = []
+        payload["conflict_count"] = conflict_count
+        payload["resolved_conflict_count"] = resolved_count
+        payload["master_record"] = {
+            "tag": master.tag,
+            "root_column_a": master.root_column_a,
+            "subtrees": [
+                {
+                    "variant_raw": st.variant_raw,
+                    "subtree": _tree_to_dict(st.subtree),
+                }
+                for st in master.subtrees
+            ],
+        }
+
+    return DataQualityClusterTreeOut.model_validate(payload)
+
+
+@router.get(
+    "/api/projects/{project_id}/dq/datasets/{dataset_id}/similarity/runs/{run_id}/clusters/{cluster_id}/tree",
+    response_model=DataQualityClusterTreeOut,
+)
+def get_cluster_tree(
+    project_id: int,
+    dataset_id: int,
+    run_id: int,
+    cluster_id: int,
+    user: Annotated[User, Depends(get_current_user_row)],
+    db: Annotated[Session, Depends(get_db)],
+) -> "DataQualityClusterTreeOut":
+    """Build and return the US-3.7 tree for one cluster.
+
+    The tree is computed on the fly (no caching) from:
+      - the saved similarity config (mappings + normalization)
+      - the cluster's member rows
+      - any golden-value overrides the user has saved against this
+        cluster's fingerprint
+    """
+    project = _data_quality_project_or_404(db, project_id, user)
+    dataset = _project_dataset_or_404(db, project, dataset_id)
+    run, cluster = _load_run_and_cluster(db, dataset, run_id, cluster_id)
+    return _build_tree_response(db, dataset, run, cluster)
+
+
+@router.put(
+    "/api/projects/{project_id}/dq/datasets/{dataset_id}/similarity/runs/{run_id}/clusters/{cluster_id}/tree/golden",
+    response_model=DataQualityClusterTreeOut,
+)
+def set_cluster_golden_value(
+    project_id: int,
+    dataset_id: int,
+    run_id: int,
+    cluster_id: int,
+    body: DataQualityGoldenValueIn,
+    user: Annotated[User, Depends(get_current_user_row)],
+    db: Annotated[Session, Depends(get_db)],
+) -> "DataQualityClusterTreeOut":
+    """Persist a user-picked golden value for one column on one cluster.
+
+    Keyed on (dataset_id, cluster.fingerprint, column_name) so the pick
+    carries forward across re-runs that produce the same cluster
+    membership. Validates ``chosen_value`` against the leaf's actual
+    variants — picking a value the user couldn't have seen is a 400.
+
+    To revert to the engine's auto-pick, call the DELETE endpoint
+    instead — that's distinct from saving ``chosen_value=null`` (which
+    means "I explicitly want the null variant")."""
+    project = _data_quality_project_or_404(db, project_id, user)
+    dataset = _project_dataset_or_404(db, project, dataset_id)
+    run, cluster = _load_run_and_cluster(db, dataset, run_id, cluster_id)
+
+    # Re-build the tree first so we know which columns + variants are
+    # valid. Cheaper than partial validation against the raw rows, and
+    # guarantees the validation logic is exactly what the UI was rendering.
+    tree = _build_tree_response(db, dataset, run, cluster)
+
+    # Find the target leaf either at the root or within a group.
+    target_leaf = None
+    if tree.root_column_a == body.column_name:
+        # Reconstruct a leaf-like for validation by reading root state.
+        # The root carries the same variants schema as a leaf.
+        valid_raws: set[str | None] = set()
+        for v in tree.root_variants:
+            if v.raw is None and v.normalized is None:
+                valid_raws.add(None)
+            else:
+                valid_raws.add(v.raw)
+                valid_raws.update(v.raw_examples)
+        target_leaf = ("root", valid_raws)
+    else:
+        for g in tree.groups:
+            for l in g.leaves:
+                if l.column_a == body.column_name:
+                    valid_raws = set()
+                    for v in l.variants:
+                        if v.raw is None and v.normalized is None:
+                            valid_raws.add(None)
+                        else:
+                            valid_raws.add(v.raw)
+                            valid_raws.update(v.raw_examples)
+                    target_leaf = (l.display_name, valid_raws)
+                    break
+            if target_leaf is not None:
+                break
+
+    if target_leaf is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Column '{body.column_name}' is not part of this cluster's "
+                f"tree. Saved configs may have changed; re-open the cluster."
+            ),
+        )
+
+    _label, valid_raws = target_leaf
+
+    # Validate against the leaf's variants. The schema allowed three shapes:
+    # scalar string, null, or list[str]. Each has different rules; the
+    # storage shape (value_kind + chosen_value) is derived from which one
+    # the user sent.
+    chosen = body.chosen_value
+    if isinstance(chosen, list):
+        if not chosen:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "chosen_value list must contain at least one variant. "
+                    "Send a scalar value or use DELETE to clear the override."
+                ),
+            )
+        # Every entry must be a real variant — null entries are not
+        # allowed in the "keep all" list because the null variant
+        # represents missing data, not a value to merge.
+        invalid = [v for v in chosen if v not in valid_raws or v is None]
+        if invalid:
+            non_null = sorted(v for v in valid_raws if v is not None)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"chosen_value list contains entries not present in "
+                    f"this cluster's '{body.column_name}' variants: "
+                    f"{invalid}. Valid choices: {non_null}"
+                ),
+            )
+        value_kind = "array"
+        stored_value = json.dumps(chosen)
+    else:
+        # scalar or explicit null
+        if chosen not in valid_raws:
+            non_null = sorted(v for v in valid_raws if v is not None)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"chosen_value is not a variant present in this cluster's "
+                    f"'{body.column_name}' values. Valid choices: "
+                    f"{non_null + (['(null)'] if None in valid_raws else [])}"
+                ),
+            )
+        value_kind = "scalar"
+        stored_value = chosen
+
+    existing = (
+        db.query(DataQualityClusterGoldenValue)
+        .filter_by(
+            dataset_id=dataset.id,
+            cluster_fingerprint=cluster.fingerprint,
+            column_name=body.column_name,
+        )
+        .one_or_none()
+    )
+    if existing is None:
+        db.add(
+            DataQualityClusterGoldenValue(
+                dataset_id=dataset.id,
+                cluster_fingerprint=cluster.fingerprint,
+                column_name=body.column_name,
+                chosen_value=stored_value,
+                value_kind=value_kind,
+            )
+        )
+    else:
+        existing.chosen_value = stored_value
+        existing.value_kind = value_kind
+        # chosen_at refreshes via the onupdate hook.
+    db.commit()
+
+    return _build_tree_response(db, dataset, run, cluster)
+
+
+@router.delete(
+    "/api/projects/{project_id}/dq/datasets/{dataset_id}/similarity/runs/{run_id}/clusters/{cluster_id}/tree/golden/{column_name}",
+    response_model=DataQualityClusterTreeOut,
+)
+def clear_cluster_golden_value(
+    project_id: int,
+    dataset_id: int,
+    run_id: int,
+    cluster_id: int,
+    column_name: str,
+    user: Annotated[User, Depends(get_current_user_row)],
+    db: Annotated[Session, Depends(get_db)],
+) -> "DataQualityClusterTreeOut":
+    """Remove the user's golden pick for ``column_name`` on this cluster,
+    reverting the leaf to the engine's auto-pick on the next render.
+
+    Returns the rebuilt tree so the UI can refresh in one round-trip."""
+    project = _data_quality_project_or_404(db, project_id, user)
+    dataset = _project_dataset_or_404(db, project, dataset_id)
+    run, cluster = _load_run_and_cluster(db, dataset, run_id, cluster_id)
+
+    # DELETE is idempotent — missing row is a successful no-op rather than
+    # a 404, so the UI can fire "reset to auto-pick" without worrying about
+    # whether a row actually exists.
+    db.query(DataQualityClusterGoldenValue).filter_by(
+        dataset_id=dataset.id,
+        cluster_fingerprint=cluster.fingerprint,
+        column_name=column_name,
+    ).delete()
+    db.commit()
+
+    return _build_tree_response(db, dataset, run, cluster)

@@ -130,3 +130,37 @@ the next begins.
 - `NORMALIZE_VERSION = "1.0.0"`
 - `SIMILARITY_VERSION = "1.0.0"`
 - `CLUSTER_VERSION = "1.0.0"`
+- `TREE_VERSION = "1.0.0"` (added Part 6)
+
+## Part 6 — US 3.7 Tree structure for similar records
+
+Split into 6.1 (backend) and 6.2 (frontend) so each carries its own approval gate.
+
+### Decisions
+- Hierarchy basis: **semantic-type buckets** — Identifiers / Contact / Address / Dates / Numeric / Other.
+- Root: **highest-weight important column** (ties → lowest mapping id, mirroring `_choose_blocking_mapping`). Other important columns appear in a first-tier "Important" group under the root.
+- UI surface: **new "Tree" tab in the existing Cluster Detail modal** (Part 6.2).
+- Interactivity: **golden-record selection per leaf**, persisted.
+- Persistence model: **cluster fingerprint** = `sha256("a:<sorted_a_members>|b:<sorted_b_members>")`. Re-runs with identical members → same fingerprint → saved picks restored.
+- Conflict rule: **distinct normalized values**. If the saved Normalizer collapses every member to a single key, no conflict — auto-pick the most-common raw form (lex tie-break).
+
+### Part 6.1 — Backend (shipped)
+- Schema: `data_quality_record_clusters.fingerprint VARCHAR(64)` (indexed by `(run_id, fingerprint)`); new table `data_quality_cluster_golden_values` keyed on `(dataset_id, cluster_fingerprint, column_name)`.
+- Migration: `_migrate_cluster_fingerprint` in `db.py` adds the column and backfills any pre-existing cluster rows from their `a_members_json` + `b_members_json` so golden lookups don't silently miss legacy data.
+- Engine: `cluster.py` writes fingerprint inline at cluster persist time; helper `cluster_fingerprint(a_members, b_members)` is exported so tests and the backfill share one source of truth.
+- Pure builder: `app/data_quality/tree.py` — semantic-bucket assignment, variant collation, conflict detection, golden overlay. Stays DB-free; the router builds inputs.
+- Endpoints (under the existing similarity router):
+  - `GET .../clusters/{cid}/tree` — builds tree on the fly, overlays saved golden picks.
+  - `PUT .../clusters/{cid}/tree/golden` — upsert by `(dataset, fingerprint, column_name)`; validates `chosen_value` against the leaf's actual variants.
+  - `DELETE .../clusters/{cid}/tree/golden/{column}` — idempotent revert to auto-pick.
+- Schemas: `DataQualityClusterTreeOut`, `DataQualityTreeGroupOut`, `DataQualityTreeLeafOut`, `DataQualityTreeVariantOut`, `DataQualityGoldenValueIn`.
+- Tests in `test_data_quality_tree.py`: bucket assignment, root selection, normalization-collapse auto-pick, true-conflict surfacing, explicit-null override, fingerprint stability (order-insensitive, A/B-distinct, membership-sensitive), engine writes fingerprint inline, GET/PUT/DELETE round-trip, validation rejects unknown columns and values not in variants, **golden carries across re-runs**, fingerprint backfill on a legacy DB.
+- Full suite: 378 passed.
+
+### Part 6.2 — Frontend (shipped)
+- `lib/api.ts`: `getClusterTree`, `setClusterGolden`, `clearClusterGolden` + types `DqClusterTree`, `DqTreeGroup`, `DqTreeLeaf`, `DqTreeVariant`, `DqTreeBucket`.
+- New `DataQualityClusterTreeView.tsx`: header pill with root value + conflict counter ("3 of 5 conflicts resolved"); root rendered with a distinguishing border; collapsible `<details>` groups per semantic bucket with bucket glyph + leaf count; per-leaf renderer that switches between read-only (no conflict) and radio-group + custom-value input + Reset (conflict). Custom-value input does a client-side check against the leaf's variants before firing PUT so the user doesn't get a 400 round-trip. "Export merged record" button writes a client-side JSON of the merged record.
+- Update `DataQualityClusterModal.tsx`: added `Members | Pair scores | Tree` tabs with role=tab + aria-selected; default tab is Members (preserves prior behavior). Tree tab mounts the view lazily so the existing members-fetch isn't blocked.
+- Tests (`DataQualityClusterTreeView.test.tsx`, 6 cases): root + Contact + Other groups render from the fixture; conflict leaves show radios, auto-pick leaves don't; selecting a radio fires PUT with `{column_name, chosen_value}` and the counter updates; Reset fires DELETE; custom-input rejects values not in the variant set; GET errors surface via role=alert.
+- Existing modal test (`DataQualitySimilarityTab.test.tsx`) updated to click into the Pair scores tab before asserting the pair-score chip.
+- Full frontend suite: 76 passed (15 files). `npx next build` succeeds; `tsc --noEmit` clean.
